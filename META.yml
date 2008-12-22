@@ -1,0 +1,32 @@
+--- #YAML:1.0
+name:               Parallel-Depend
+version:            3.0
+abstract:           Parallel process startup with dependencies and restart.
+Execute, Config, Utilities modules simplify generating
+#! code for running queues including logging, email
+notification, file read/write, and generation of absolute
+paths relative to the execution directory paths via tokens .
+author:
+    - Steven Lembark <lembark@wrkhors.com>
+license:            unknown
+distribution_type:  module
+configure_requires:
+    ExtUtils::MakeMaker:  0
+requires:
+    Carp:            0
+    constant:        0
+    Cwd:             2.12
+    Data::Dumper:    2.102
+    File::Basename:  2.6
+    FindBin:         1.44
+    MIME::Lite:      3
+    strict:          0
+    Symbol:          0
+no_index:
+    directory:
+        - t
+        - inc
+generated_by:       ExtUtils::MakeMaker version 6.48
+meta-spec:
+    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
+    version:  1.4

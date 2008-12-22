@@ -1,0 +1,676 @@
+
+Revision history for Perl extension Parallel::Depend
+(most recent first).
+
+3.0 Mon Dec 22 18:05:42 EST 2008
+
+- Reworked interface, parsing. Interface now uses
+  inside-out class for the que data, allows using
+  any generic object as the manager.
+
+- Parsing input schedule is faster, especially for
+  large schedule lists.
+
+2.5 Fri Apr 29 19:48:08 EDT 2005
+
+- Added S::D::U::handle_que_args
+
+    Allows que methods to use:
+
+        my ( $que, $config ) = &handle_args;
+
+    or
+
+        my ( $config ) = &handle_args;
+
+    and yanks $que off of the stack. It also sets
+    $DB::single = 1 if $que->debug (i.e., automatic
+    breakpoint in debug mode) and logs the caller, 
+    arguments.
+
+    This replaces the top few lines of nearly every 
+    que method.
+        
+
+2.4 Tue Apr 26 16:54:56 EDT 2005
+
+- Replaced use of internal "debug" que attribute with
+  "validate" to avoid conflict with "runsched" use of the
+  attribute (debugging a queue). This allows for:
+
+    $que->subque( %blah )->validate->execute;
+
+  when executing via runsched in debug mode.
+
+2.3 Sat Jan 15 10:17:11 EST 2005
+
+- Added "splat" to Utilities. This writes out larger items
+  as tab-separated-values files, which saves overhead of 
+  Dumper. Update slurp to eval then split on newlines and
+  tabs (i.e., handle splat output).
+
+2.2 Mon Jan 10 08:20:47 UTC 2005
+
+- Added sanity check for missing classes after use base of
+  the user's use_base list. This spots missing classes (i.e,
+  ones that didn't compile) before their sub's fail up as
+  "shellexec" calls at runtime.
+
+2.1 Sun Dec 26 06:34:50 EST 2004
+
+- Fixed a typo in Utilities, replaced {basename} with {basenames} in 
+  config check for localpath.
+
+2.00 Sun Dec 26 06:34:50 EST 2004
+
+- Added doc's for Execute, Utilities, and Config
+  modules. Updated comments in all of the modules.
+
+1.00 Fri Apr  9 01:28:58 CDT 2004
+
+- Added Parallel::Depend::Execute, S::D::Config,
+- Added Parallel::Depend::Execute, S::D::Config,
+  S::D::Utilities to simplify generating #! code and
+  methods for schedules. Execute exports "runsched"
+  to handle running or debugging the schedules. The
+  user supplies one more module to define a defaults
+  hash and the #! code can be 4 lines.
+
+- Utilities includes logging, nastygrams, progress
+  mail, directory sanity checks, local path generation.
+
+- Config handles extracting relavant portions of the
+  main config hash. This is mainly for use in methods
+  since they can use "$que->moduleconfig" to get a
+  hash of defaults useful in the current module.
+
+- The S::D interface is unlikely to change at this
+  point.
+
+- 2do: The added modules need more POD and tests in
+  test.pl. 
+
+
+0.33 Mon Mar 15 23:07:33 CST 2004
+
+ - Added use of @::ttyz to fork handler for easier 
+   debugging of multi-level forks. Pre-opened term's
+   can be listed in the global variable, which is 
+   shifted off before each fork. This simplifies
+   multi-level debugs (e.g., for groups).
+
+ - execute does a better job of handling non-zero group
+   exits and die's. They are stored in the $que object
+   along with being handed back via exit status.
+
+ - Doc bugs.
+
+0.31 Sat Jan  4 21:40:03 CST 2003
+
+ - 	Fixed noabort mode (works like "make -k"). Passing in 
+ 	abort => 0 will not set the $que->{abort} value and 
+	will thus skip only jobs which depend on the one that
+	failed.
+
+ -	Comment cleanups.
+
+
+0.30 Mon Nov  4 17:11:56 CST 2002
+
+ -	Parallel::Depend::subque can also handle a hash referent
+ -	Parallel::Depend::subque can also handle a hash referent
+ 	as the schedule object.
+
+ -	ref $_[0] eq 'ARRAY' allows passing the queue in as an 
+ 	array referent. Doesn't allow for blessed arrays, however, 
+	which should stringify into the schedule.
+
+ - 	added "ttylog" to avoid re-opening STDERR/STDOUT to .out
+ 	and .err files. This puts everything from the scheule onto
+	the tty. Mainly useful for debugging or where network 
+	interfaces might get cut off if there isn't any activitiy
+	on the connection for too long.
+
+ -	ttylog mode does not overwrite any existing log files
+ 	(or create new ones). This avoids creating a directory
+	full of empty logs or overwriting valid ones during 
+	a test run.
+
+ -	Replaced the top-level que attributes (verbose, ttylog,
+ 	force, ...) with $que->{attrib}. This is the single unit
+	of inherited data for sub-queues.
+
+ -	Added $que->{user} as inherited piece of sub-queues along
+ 	with $que->{attrib}. The "user" entry is not managed in any
+	other way by by S::D can be used to store information carried
+	into sub-qeues, blessed, whatever.
+
+ -	Minor internal bugfixes.
+
+ -	Updated test.pl to handle new que syntax.
+
+0.29 Thu Sep 12 19:31:32 CDT 2002
+
+ -	Parallel::Depend::prepare will now take a hash ref as
+ -	Parallel::Depend::prepare will now take a hash ref as
+ 	the schedule argument. This allows the schedule to be
+	a list, text scalar, or hash ref.
+
+0.28 Thu Sep 12 19:31:11 CDT 2002
+
+ - 	Nothing, dealt with an upload screwup.
+
+0.27 Tue Sep 10 14:32:58 CDT 2002
+
+ -	Doc, comment cleanups.
+
+ -	Cleaned up the distribution package a bit (Depend.pm 
+ 	now lives in lib/Schedule).
+
+0.26 Thu Jun  6 09:06:45 CDT 2002
+
+ - 	debug argument avoids calling unalias, simply checks
+ 	if the job list deadlocks. This will >>not<< process groups
+	beyond determining if they deadlock w/in the main schedule.
+	The main purpose for this is assuring that the log and run
+	directories are in place and that the que doesn't obviously
+	deadlock.
+
+ - 	nofork argument runs the que serially without forking.
+ 	This is intended mainly for debugging and allows running
+	scheduled using "perl -d" with impunity. It effectively
+	limits the maxjobs to 1 since nothing is forked, the jobs
+	are executed in an eval one by one.
+
+ -	In order to avoid conflicts with the accessor methods,
+ 	the "debug" sub has been renamed to "validate".  If someone
+	thinks of a better name warn me.
+
+ -	POD updates.
+
+
+0.25 Wed May 22 02:17:08 CDT 2002
+
+ -	Blocking on job slots displays the blocked jobs if verbose > 1.
+
+ -	Replace $que->{abort} with $que->{failure} to avoid confusion
+ 	with $que->{noabort} switch value. Failed queues now have
+	the message in $que->{failure}. This doesn't effect the 
+	external interface (aside from removing the "abort" accessor
+	method and replacing it with "failure").
+
+ -	Added "force" argument to override precheck croaking
+ 	on non-empty pidfiles without an exit. Used with
+	restart, it forces execution of anything without an
+	exit status in the pidfile.
+
+ -	Decided on group syntax. Using '::' for groups is 
+ 	problematic due to Perl's module notation; almost
+	anything else might appear in a shell alias. Current
+	notation is to enclose the jobs in angle-brackets
+	("<>") surrounded by whitespace. The closing delimeter
+	makes it a bit more obvious that the group "encloses"
+	the jobs.
+
+		groupname < job1 job2 : job3 >
+		groupname < job4 : job5 job6 >
+
+	creates a single group with 6 jobs in it. Syntax for
+	the group is a full scheudule. The default handler is
+	group (i.e., groupname is aliased to "group" if none
+	already exists when the group is processed).
+
+
+	The group mechanism will look something like:
+
+		Create a lookaside list for the group with the group's
+		schedule in it. The schedule is keyed by the groupname.
+
+		When the group becomes runnable then $que->group('groupname')
+		is called, which prepares the schedule from the lookaside
+		list and then executes it. If the groupname is aliased to
+		another method then that one will be used to dispatch the
+		group's schedule (e.g., $que->mygroup('groupname') via 
+		"groupname = mygroup" in the schedule).
+
+	The schedule then looks something like:
+
+		transform = group	# optional, added automatically 
+
+		transform < mungethis : mungethat >
+		transform < mungeother : >
+
+		transform : extract
+		load : transform
+
+	This creates a group with munge* jobs in it (they can be spread
+	out however is most useful). The group handler converts this into
+	something like:
+
+		transform = group
+
+		transform : extract
+		load : transform
+
+	When "transform" becomes runnable it is called via
+	$que->group( 'transform' ) which calles subque with
+	( sched => 'mungethis mungethat mungeother :' ) then
+	prepares executes the sub-que.
+
+
+ -	More doc updates. They now reflect most of reality.
+ 	Included example of using multi-line entries in the
+	schedule via array ref.
+
+ -	Fix typos in progress message trim, docs.
+
+
+0.24 
+
+ -	unalias now returns an array of two items: the id string 
+ 	and a closure. the string is used in execute for displaying
+	job status, the closure does the deed. This avoids the 
+	current stringified code referent going into the pidfile
+	as the job identifier.
+
+ -	Added "STUB" with behavior identical to PHONY (i.e., returns
+ 	$job (STUB) immediately). Only purpose is to improve documentation
+	during devleopment.
+
+ -	Internal change to handle subque argument. This should not be
+ 	visible if the "subque" argument is not passed to preapre.
+
+0.23 Wed May 15 11:12:44 CDT 2002
+
+ -	Add'l sanity check in prepare for assigning to maxjob: arguments
+ 	only assign non-zero maxjob and only if maxjob is already zero.
+	This avoids the prepare aruments overriding a schedule limit. Since
+	zero is the default anyway this shouldn't cause any real pain.
+
+ -	Minor boilerplate added to status sub.
+
+ -	Comments.
+
+0.22 Tue May  7 22:48:42 CDT 2002
+
+ -	Added "informational" sub's to extract configuration and 
+ 	status of object:
+
+		alias()
+
+		alias( @items )
+
+			returns a copy of the alias hash (not the
+			original) or a hash slice of the requested
+			items from the hash.
+
+		status()
+		
+			Returns an anon. hash with the values of
+			alias(), restart, noabort, abort, verbose,
+			and debug keyed by their names.
+
+		These are mainly useful for creating sub-queues with
+		largely the same values as the parent.
+
+		And single-value items:
+
+		restart()	true/false if que is restarting
+		noabort()	true/false if que is running noabort.
+		abort()		current abort value (string).
+
+		verbose()	integer of verbosity.
+		debug()		true/false if in debug mode.
+
+		jobz()		$jobz{$pid} = $job (i.e., pid => job string ).
+		pidz()		$pidz{$pid} = $pidfilepath
+
+		rundir()	path of run directory
+		logdir()	path of log directory
+
+
+ -	Minor cleanups.
+		
+
+
+0.21 Sat May  4 13:43:47 CDT 2002
+
+ -	PHONY jobs don't pre-check pidfiles.
+
+ -	Zero-size pidfiles are assumed non-running in restart mode,
+ 	this saves having to blow off the unused pidfiles after a
+	que is aborted via ^C.
+
+ -	Few minor '==' code bugs.
+
+ -	^C handling via $SIG{INT} handler setting $que->{abort}. 
+
+ - 	TERM handler forwards a SIGTERM to the process group; forked
+ 	process sets $SIG{TERM} = 'DEFAULT'; if the child process
+	needs any speical SIGTERM handling it will install that for
+	itself on startup.
+
+ -	Turned off warnings during the + 0 check in the child 
+ 	process to avoid logging warnings about non-numeric 
+	values.
+
+ -	test.pl is in serious need of updates to check all of
+ 	this properly. 
+
+ -	Minor code, comment cleanups.
+
+ -	Remove Depndency on Text::Balanced.
+
+0.19 Sat Apr 20 22:27:38 CDT 2002
+
+ -	At this point the interface isn't going to change.
+
+ -	Clean up unalias a bit, pushed lexicals into the
+	if-ladder.
+
+ -	Added croak ... unless $que at top of execute. Catches
+ 	accidental re-runs quicker.
+
+ -	Code allows unalias to be called as a class method.
+ 	Main use of this is more automatic handling of the 
+	if-ladder for cases where a preliminary job has to 
+	be run outside of the schedule.
+
+ - 	Added eval to require the package for A::B-type
+ 	aliases. This guarantees that $packag->can( $subroutine )
+	succeeds even if S::D doesn't already have the
+	package available.
+
+ - 	Package::Subroutine alias handling includes an 
+ 	eval to require the sub in case it hasn't already 
+	been pulled in where unalias can see it.
+
+ -	unalias always returns a code referent. handling of
+ 	system calls is pushed into S::D->shellexec. This
+	allows better logging of return values, since they
+	actually mean something speicific. Also allows 
+	overloaded method to run better sanity checks
+	before dispatching to the shell if the environment
+	is better controlled.
+
+ -	Slightly better testing in test.pl to account for
+ 	some of the more offball alias formats.
+
+0.18 Fri Apr 20 2002
+
+ -	Comments, POD.
+
+0.17 Pretend this never happend...
+
+0.16 Wed Apr 17 20:54:30 CDT 2002
+
+ -	Updated &precheck to use the last line of a 
+ 	pidfile if has >= 3 lines and perform a 
+	numeric comparison to 0 for the exit status.
+	This allows for the child + parent both 
+	writing the status and sub's returning strings
+	for successful execution.
+
+ -	Put back the code that has the child writing
+ 	the returned scalar to the pidfile unmodified.
+	This will store any return strings from called
+	sub's. Parent gets back $result + 0 and writes
+	the numeric pic to the file. Either way, the
+	next pass with precheck can use "$linz[-1] = 0"
+	to determine if the job completed successfully.
+
+ -	Removed Text::Balanced until I can find out 
+ 	why it returns a block for "/foo/bar". Using
+	regex /^({.+})$/ to extract any blocks.
+ 	
+
+0.15 Tue Apr 16 12:13:59 CDT 2002
+
+ -	Add the use of Text::Balanced::extract_codeblock
+ 	to handle anon sub's in the aliases. This allows
+	a schedule to contain valid perl blocks that will
+	be compiled and executed at runtime. 
+
+	For example:
+
+		foo = { do_this($dir) || do_that($dir) or croak "$$: Neither that nor this!" }
+
+		...
+
+		foo : bar 
+
+	Will call the do_this or do_that sub's with the 
+	value of $dir expanded in the parent process at
+	runtime. 
+	
+	Note that the code must be on a single line.
+
+	Since unalias() is called in the parent this can
+	have side effects on subsequent children (e.g., 
+	foo = {do_this(pop @dirlist)}). 
+
+
+0.12 Fri Apr 12 14:05:41 CDT 2002
+
+ -	Added handling for sub's named with packages for
+ 	the calls. e.g., "Foo::Bar::bletch : frobnicate"
+	will call the subroutine in that package if it 
+	exists. This requirs some change in the parser
+	since it now has to detect colons that aren't 
+	followed by colons to perform the split (not 
+	difficult).
+
+	At this point unalias can automatically detect
+	methods, local subs and subs w/ package names
+	before dispatching to the shell.
+
+	Order of lookups is also changed, from Package::Sub
+	through method to sub.
+
+ -	Replaced assignment for $run with test for ref $que
+ 	and defined $que->{alias}{$job}. This allows false 
+	values for placeholders and avoids problems if unalias
+	is called as a class method.
+
+
+0.11 Fri Apr 12 03:46:48 CDT 2002
+
+ - 	Stamped out some doc bugs. Mainly that the 
+ 	required argument is "sched" not "depend",
+	empty aliases are no longer errors and 
+	bogus pod.
+
+0.10 Thu Apr 11 14:16:40 CDT 2002
+
+ -	Update unlias to search for $que->can( $run ) or 
+	__PACKAGE__->can($run)', using closures to call
+	the method/sub with the aliased string as an
+	argument. This allows scheduling of methods or
+	subs by name without any modification to the 
+	S::D code.
+
+	The mechanism for finding sub's is to unalis the
+	jobname first, look for the ->can or CODE ref
+	and pass it the original jobname if it's found.
+
+	Thus:
+
+
+		abc : foo
+		xyz : foo
+		bar : foo
+
+		bar : abc xyz
+
+	to call foo('abc'), foo('xyz') and foo('bar').
+	This might be useful for, say, cleaning up multiple
+	directories. To pass more informaiton just use 
+	the arguments as hash keys into a package/global
+	value with the extra info.
+
+ -	Assigning an empty or 'PHONY' alias is a noop.
+ 	Thus:
+
+		foo =
+
+	or 
+
+		foo = PHONY
+
+	Will insert an immediate return of zero job into
+	the schedule. This is mainly to neaten things up:
+
+		foo =
+		
+		foo : long_named_job_one
+		foo : even_longer_named_job_two
+		foo : something_you_surely_do_not_want_to_type
+
+		bar : foo
+
+	now bar depends on all of the other three jobs without
+	the line-from-hell in the middle of a schedule. This can
+	also be handy for generating schedules on the fly, where
+	bar is a placeholder and the others are pushed onto a 
+	stack if they are needed.
+
+ -	Doc updates.
+
+
+0.09
+
+	Put the tarball into a tarball rahter than 
+	cpio archive, no change to the code.
+
+0.08 Fri Apr  5 10:10:08 CST 2002
+
+ -	Added runjob to handle the result of unalias
+	after the fork. If the unaliased scalar is a
+	code reference then it exits with the result
+	of &$job; otherwise exec's $job. 
+
+	Using an unalias with:
+
+		no strict 'refs';
+		\&$job
+
+	to expand the tag from the scheule allows 
+	queueing subroutines -- or a mixture of
+	subroutines and shell execs. This could also
+	return a closure to push evaluation parameters
+	even later into the cycle (or for testing).
+
+	See notes for unalias & runjob for examples.
+
+ -	Added switch for handling failed jobs without
+	aborting the queue. This offers the same effect
+	as "make -k". If "noabort => true" is passed
+	into prepare then jobs that fail will have their
+	dependencies marked for skipping and the pidfiles
+	will get a nastygram + exit status of -1 (i.e.,
+	they will be re-executed on a restart). 
+
+	The noabort code doesn't seem to break anything,
+	but has not been fully tested (yet).
+
+ -	pidfile and output directories can be passed in with the arguments,
+	picked up from the environment or default to the current
+	executable's directory name. the environment method can be
+	handy for the single-argument version.
+
+ -	Serious updates to pod and comments.
+
+
+0.07
+
+	Default for $que->{alias}{logdir} and {rundir}
+	are "dirname $0". Simplifies running multpile
+	copies of the same file and schedule from 
+	different directories via soft link.
+
+	Revised exit status writing. The child uses
+	system instead of exec and writes $? to its
+	own pidfile; the parent writes $? to the pidfile
+	if it is non-zero. This allows either the parent
+	or child to get zapped by a signal, leave the
+	other running and correctly record the status.
+	It also means that the pidfiles may be 4 lines
+	long on failure. Fix there is to read [0..2]
+	to check the status on the way in for restarts.
+
+	Updated comments to reflect reality a bit better.
+
+0.06
+
+	Remove some of the extra newlines -- they aren't
+	required since individual job output goes to 
+	stdout/stderr files.
+
+	Shuffled verobse prints to a bit to give saner
+	combinatins of output. At this point test.log 
+	should give a reasonable idea of what slient,
+	progress and detailed output look like.
+
+	Process verbose as an alias for setting verbosity.
+
+	Add sanity check for odd number of arg's > 1
+	in prepare. Makes it harder to zap thyself by
+	adding "verbose => X" after a single-value
+	schedule entry.
+
+	test.pl checks for forkatotis in the module by 
+	comparing the initial pid running test.pl with
+	what's running after the test_blah call; croaks
+	if the pid has changed since test.pl startup.
+
+	Updated comments, pod to reflect the changes 
+	since 0.03.
+
+	Note: Still need to come up with a reasonable
+	definition for processing the debug alias/arg
+	during prepare and execution. It may require
+	debug levels like: 1 => don't fork, 2 => also
+	don't check or write pidfiles. Problem there
+	is making sure that mixing $que->debug with 
+	$que->prepare( ... debug => X ) doesn't cause
+	unnecessary errors.
+
+0.05:
+
+	Output of individual jobs goes to $logdir/$job.out
+	and $logdir/$job.err. Main purpose is to keep the
+	top-level schedule logs clean.
+
+	test.pl puts stdout to test.log -- saves a lotta 
+	stuff flying by on make test.
+
+	verbose and debug arg's to prepare and execute
+	are independent (i.e, you can now debug in silent
+	mode and get minimal output).
+
+0.04 Fri Mar  1 13:52:34 CST 2002
+
+	debug uses copy of queue, doesn't consume original
+	object during debug, returns original object if 
+	debug is successful. see comments for use.
+
+	updated verbose handling, now has three levels: 0, 1, 2.
+	0 == stop/start messages and nastygrams, 1 == progress
+	messages from fork/reap; 2 == fairly detailed.  $q->{verbose}
+	overrides the debug switch; no verbose setting w/ debug
+	gives verbose == 2. added description of changes to POD.
+
+	all verbose-controlled output goes to STDOUT, nastygrams
+	and que start/complete messages to STDERR.
+
+	doc updates to reflect changes in verbosity.
+
+0.03 Wed Feb 27 12:20:18 CST 2002
+	Doc updates.
+	test.pl updated.
+
+0.02  Wed Feb  6 17:25:02 CST 2002
+	Release-able version.
+
+0.01  Wed Feb  6 10:20:32 2002
+	Beta

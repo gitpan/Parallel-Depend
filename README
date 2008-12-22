@@ -1,0 +1,114 @@
+
+              Release 0.30 of Parallel::Depend
+              Release 0.30 of Parallel::Depend
+
+
+NAME
+
+    Parallel::Depend	 parallel scheduling with dependencies and sub-jobs. 
+    Parallel::Depend	 parallel scheduling with dependencies and sub-jobs. 
+
+
+DESCRIPTION
+
+	Parallel::Depend is similar to make in that it handles
+	Parallel::Depend is similar to make in that it handles
+	dependencies between tasks, can run tasks in parallel,
+	and handles sub-schedules. The syntax is simpler than
+	make's, however, at one line per entry with the jobs
+	tasks themselves being executed.
+
+	Tasks can be perl code dispatched via method or 
+	Package::Subname syntax, anonymous code blocks, or
+	shell code desctibed by relative or absolute paths.
+	This allows syntax like:
+
+		/my/shell/job : method Package::Subname
+
+	to run a shell command if $que->method() and Package::Subname
+	both return true.
+
+	Aliases can be used to simplify syntax or include white
+	space into shell commands:
+
+		foo = /some/path/foo -x -y -z
+
+		foo : bar
+
+	will run system( '/some/path/foo', '-x', '-y', '-z' )
+	if bar returns true.
+
+	Aliases can also be used to pass arguments to perl code:
+
+		file1.tar.gz = download
+		file2.tar.gz = download
+		file3.tar.gz = download
+
+		cleanup : file1.tar.gz file2.tar.gz file3.tar.gz
+
+	will call $que->downoad( 'file1.tar.gz' ), and so on for
+	each file the, then call cleanup. Assigning an alias to 
+	a Package::Subname will call the subroutine, passing it 
+	a single argument.
+
+	Sub-queues can be used to manage exit status as a group or
+	to manage parallel execution:
+
+		maxjob = 2
+		verbose = 1
+
+		one two : /path/to/prepare
+
+		cleanup : one two
+
+		one < maxjob = 1 >
+		one < verbose = 0 >
+		one < this : that >
+		one < other : this >
+
+		two < maxjob = 1 >
+		one < verbose = 2 >
+		two < foo : bar >
+		two < bletch : blort >
+
+	This has two groups: "one" and "two". The main schedule 
+	will run the prepare script, check the shell exit for
+	errors, thn dispatch the groups one and two in parallel.
+	Withing the two groups jobs are run single-file ("maxjob = 1")
+	with one group having zero verbosity an two having two verbosity.
+
+	the "groupname < entry >" syntax creates an alias "groupname = group",
+	which eventually dispatches the group name to a method named
+	"group" for processing (i.e., it functions as a standard alias).
+	This behavior can be overridden by simply assigning the group name
+	to another alias:
+
+		foo = mygrouphandler
+
+		foo < onejob twojob : threejob four >
+
+	will store the "onejob... four" entry and eventually call 
+	$que->mygrouphandler( 'foo' ), at which time the alternate
+	group handler can prepare the sub-schedule and process it.
+	
+	The Parallel::Depend::unalias method is used to generate 
+	The Parallel::Depend::unalias method is used to generate 
+	closures which dispatch the scheduled items. unalias uses
+	can() and table lookups to make a reasonable decision as
+	to what must be run. This can be handy for use with 
+	Schedule::Cron; which can then be used to dispatch perl code
+	or anonymous perl blocks. 
+
+
+
+AUTHOR
+    
+	Steven Lembark <lembark@wrkhors.com>
+
+COPYRIGHT
+
+    Copyright (c) 1997-2002, Steven Lembark All Rights Reserved. This module
+    is free software. It may be used, redistributed and/or modified under
+    the terms of the Perl Artistic License (see
+    http://www.perl.com/perl/misc/Artistic.html)
+
