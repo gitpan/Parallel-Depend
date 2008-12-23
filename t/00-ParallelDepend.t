@@ -7,6 +7,10 @@ use Cwd             qw( getcwd );
 my @methodz =
 qw
 (
+    log_format
+    mgr_que
+    install_que
+    failure
     queued
     ready
     depend
@@ -14,17 +18,6 @@ qw
     complete
     status
     alias
-    restart
-    force
-    noabort
-    verbose
-    debug
-    nofork
-    rundir
-    logdir
-    jobz
-    pidz
-    failure
     precheck
     runjob
     unalias
@@ -32,6 +25,8 @@ qw
     sched_list
     group
     subque
+    construct
+    new
     prepare
     validate
     execute
@@ -51,23 +46,32 @@ use_ok $module, "$module' is usable";
 ok $module->can( $_ ), "$module can '$_'"
 for @methodz;
 
-my @sched   = 
-(
-    q{verbose % 99          }, 
-    q{foo :                 },
-    q{foo = bar             },
+my $sched
+= qq
+{
+    var_dir   % $tmpdir
+    verbose   % 99
 
-    q{fee < fie : >         },
-    q{fee < foe : >         },
-    q{fee < fum : >         },
-);
+    foo :
+    foo = bar
+
+    fee < fie : >
+    fee < foe : >
+    fee < fum : >
+
+    Bletch::Blort::blah : foo
+
+    foo : fee
+
+    fee :
+};
 
 my $queue   = $module->prepare
 (
     verbose => 2,
     rundir  => $tmpdir,,
     logdir  => $tmpdir,
-    sched   => \@sched,
+    sched   => $sched,
 );
 
 ok $queue, 'Prepare returns a queue';

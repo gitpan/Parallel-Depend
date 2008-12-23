@@ -2,6 +2,11 @@
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 
+3.01 Tue Dec 23 12:59:47 EST 2008
+
+- Modify regex to handle splitting up standalone
+  jobs ('foo:') to handle whitespace variances.
+
 3.0 Mon Dec 22 18:05:42 EST 2008
 
 - Reworked interface, parsing. Interface now uses

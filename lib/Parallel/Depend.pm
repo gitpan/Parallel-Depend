@@ -29,16 +29,15 @@ use constant CLEAN  =>  1;
 use constant ABORT  => -1;
 
 use Carp;
-
+use Data::Dumper;
 use File::Basename;
 
 use Scalar::Util    qw( blessed looks_like_number refaddr reftype );
 use Storable        qw( dclone );
 use Symbol          qw( qualify_to_ref      );
 
-# pretty-print the object in debug mode.
 
-use Data::Dumper;
+use Parallel::Depend::Util;
 
 ########################################################################
 # package variables
@@ -119,33 +118,15 @@ my %defaultz =
 
 );
 
-# que data. 
-# this largely managed by the sub's below 
-# but is also localized by validate 
+# que data.
+# this largely managed by the sub's below
+# but is also localized by validate
 
 my %mgr2que = ();
 
 ########################################################################
 # subroutines
 ########################################################################
-
-sub log_format
-{
-    $Data::Dumper::Purity       = 1;
-    $Data::Dumper::Terse        = 1;
-    $Data::Dumper::Indent       = 1;
-    $Data::Dumper::Deepcopy     = 0;
-    $Data::Dumper::Quotekeys    = 0;
-
-    my $header  = $$ . ' ' . shift;
-
-    print join "\n",
-    map
-    {
-        ref $_ ? Dumper $_ : $_
-    }
-    $header, '', @_, ''
-};
 
 # called as
 #
@@ -735,7 +716,7 @@ sub unalias
             $mgr->can( 'AUTOLOAD' )
         )
         {
-            # they asked for it... let the autoload 
+            # they asked for it... let the autoload
             # demangle the run call for itself.
 
             sub { $mgr->$run( $job ) }
@@ -892,7 +873,7 @@ sub group
     my $sched = $que->{ group }{ $name }
     or croak "$$: Bogus rungroup for $name: missing group entry in que";
 
-    log_format "Preparing subque $name:", $sched
+    log_message "Preparing subque $name:", $sched
     if $mgr->verbose > 1;
 
     # caller gets back the result of running the schedule.
@@ -988,12 +969,14 @@ sub new
 
 sub prepare
 {
+    $DB::single = 1;
+
     local $\ = "\n";
     local $, = "\n";
     local $/ = "\n";
 
     # the prototype's namespace is used to dispatch
-    # any methods in the schedule. 
+    # any methods in the schedule.
     #
     # if the prototype is already blessed then recycle
     # it as the queue manager, otherwise create a new
@@ -1058,7 +1041,7 @@ sub prepare
     {
         # it's a scalar string with the schedule in it
 
-        $argz{ sched } = shift;
+        $argz{ sched } = $_[0];
     }
     else
     {
@@ -1066,7 +1049,7 @@ sub prepare
 
         confess "Bogus prepare: unusable arguemnt '$_[0]'"
     }
-        
+
     # sanity check the arguments.
 
     confess "Missing schedule list"
@@ -1083,10 +1066,10 @@ sub prepare
 
     # make sure it is an array reference.
 
-    $argz{ sched } = [ split "\n", $argz{ sched } ]
+    $argz{ sched } = [ split /\n+/, $argz{ sched } ]
     unless ref $argz{ sched };
 
-    # now deal with the arguments themselves and the 
+    # now deal with the arguments themselves and the
     # schedule.
 
     my $verbose = $argz{ verbose } || 0;
@@ -1095,7 +1078,7 @@ sub prepare
     # much of this won't get used until runtime,
     # having it available simplifies life, however.
 
-    my $que = 
+    my $que =
     {
         # defined by the schedule.
 
@@ -1160,7 +1143,7 @@ sub prepare
     {
         s{ \s+ }{ }xg;
 
-        s{^ (\S+?) :? $}{$1 : }x;
+        s{^ (\S+?) [ ]* : [ ]* $}{$1 : }x;
 
         s{^ (\S+?) ([=%<]) }{$1 $2 }x;
 
@@ -1170,11 +1153,11 @@ sub prepare
         # 'x < y = z >' -> [ '<',  'x', 'y = z' ]
         #
         # Note: this leaves a dangling '>' on the group
-        # definitions that has to get split off in the 
+        # definitions that has to get split off in the
         # group handler.
 
         [ ( split m{ \s+ ( [:=%<] ) \s+ }x, $_, 2 )[ 1, 0, 2 ] ]
-    } 
+    }
     grep
     {
         # strip out obvious whitespace and comment lines
@@ -1182,12 +1165,12 @@ sub prepare
         s{^ \s+ }{}x;
         s{ #.* $}{}x;
 
-        m{\S} 
+        m{\S}
     }
     @{ delete $argz{ sched } }
     or confess 'Empty schedule';
 
-    log_format 'Preparing Schedule From:', \@linz
+    log_message 'Preparing Schedule From:', \@linz
     if $verbose;
 
     # step 1: deal with information in the attribues.
@@ -1264,10 +1247,33 @@ sub prepare
         \%a
     };
 
-    log_format 'Attributes:', $que->{ attrib } if $verbose;
+    # verbose displays decision information, non-verobse only
+    # displays error messages.
+    #
+    # $argz{verbose} overrides all other levels during
+    # preparation, without an argument it's either
+    # 2 (set via $que->{nofork}) or defaults to 0 (not much
+    # output).
+    #
+    # verbose > 0 will display the input lines.
+    # verobse > 1 additionally displays each alias/dependency
+    # as it is processed.
+    #
+    # if nothing "verbose" is set in the schedule or arg's
+    # then debug mode runs in "progress" mode for verbose.
+    #
+    # note that we may be in a subque here so verbose has
+    # to be re-checked for each processing cycle.
+
+    $verbose = $que->{ attrib }{ verbose } > 1;
+
+    log_message 'Attributes:', $que->{ attrib }
+    if $verbose;
+
+    @linz   = grep { '%' ne $_->[0] } @linz;
 
     # next: deal with information in the aliases.
-    # note that aliases w/in groups are dealt with 
+    # note that aliases w/in groups are dealt with
     # when the group is dispatched (in subque).
     #
     # [ '=', 'name', 'alias' ]
@@ -1287,27 +1293,10 @@ sub prepare
         \%a
     };
 
-    log_format 'Aliases:', $que->{ alias } if $verbose;
+    log_message 'Aliases:', $que->{ alias }
+    if $verbose;
 
-    # verbose displays decision information, non-verobse only
-    # displays error messages.
-    #
-    # $argz{verbose} overrides all other levels during
-    # preparation, without an argument it's either
-    # 2 (set via $que->{nofork}) or defaults to 0 (not much
-    # output).
-    #
-    # verbose > 0 will display the input lines.
-    # verobse > 1 additionally displays each alias/dependency
-    # as it is processed.
-    #
-    # if nothing "verbose" is set in the schedule or arg's
-    # then debug mode runs in "progress" mode for verbose.
-    #
-    # merging in any existing attrib settings is done in
-    # order to handle sub-queues.
-
-    $verbose = $que->{ attrib }{ verbose } > 1;
+    @linz   = grep { '=' ne $_->[0] } @linz;
 
     # at this point the aliases have been dealt with;
 
@@ -1362,12 +1351,13 @@ sub prepare
 
             keys %uniq
         };
-        
+
         my %grp2sched   = ();
 
         for my $name ( @namz )
         {
-            print "$$: Adding group: $name" if $verbose;
+            print "$$: Adding group: $name"
+            if $verbose;
 
             $grp2sched{ $name } =
             [
@@ -1397,13 +1387,16 @@ sub prepare
     # at this point all of the items for any one group
     # have been collected in the lookaside list $que->{group}.
 
-    log_format 'Groups defined:', $que->{ group }
+    log_message 'Groups defined:', $que->{ group }
     if $verbose;
+
+    @linz   = grep { '<' ne $_->[0] } @linz;
 
     # items without ' % ',' = ' or ' < ' are the sequence
     # information.
 
-    print "$$: Starting rule processing" if $verbose;
+    print "$$: Starting rule processing"
+    if $verbose;
 
     # syntatic sugar, minor speedup.
 
@@ -1411,11 +1404,10 @@ sub prepare
     my $queued	= $que->{ queued    };
     my $phony	= $que->{ phony     };
 
-    for( @linz )
+    for( grep { ':' eq $_->[0] } @linz )
     {
-        ':' eq $_->[0] or next;
-
-        log_format 'Processing rule:', $_ if $verbose;
+        log_message 'Processing rule:', $_
+        if $verbose;
 
         # break up the line into two pieces on the first ' : '
         # then split the remainin pieces on whitespace. the
@@ -1455,7 +1447,8 @@ sub prepare
 
             next if exists $queued->{ $job };
 
-            croak "$$: Unrunnable: $job" if $mgr->precheck( $job );
+            croak "$$: Unrunnable: $job"
+            if $mgr->precheck( $job );
 
             $queued->{ $job } = {};
         }
@@ -1495,9 +1488,17 @@ sub prepare
 
     if( $verbose )
     {
-        log_format 'Jobs:',         sort keys %$queued;
-        log_format 'Waiting for:',  sort keys %$depend;
+        log_message 'Jobs:',         sort keys %$queued;
+        log_message 'Waiting for:',  sort keys %$depend;
     }
+
+    if( @linz = grep { ':' ne $_->[0] } @linz )
+    {
+        log_warning
+    }
+
+    # anything left in @linz at this point is unusable cruft
+    # and needs to be logged.
 
     # quick sanity checks: is everything listed as a dependency
     # also a job and is there at least one job that has no
@@ -1785,6 +1786,8 @@ sub execute
                 # debug just checks for deadlocks;
                 # nofork actually runs the jobs and is intended
                 # for debugging.
+
+                $DB::single = 1 if $mgr->debug;
 
                 if( $attrib->{ validate } )
                 {
