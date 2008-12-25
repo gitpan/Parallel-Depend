@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Parallel-Depend
-version:            3.01
+version:            3.02
 abstract:           Parallel process startup with dependencies and restart.
 Execute, Config, Utilities modules simplify generating
 #! code for running queues including logging, email
@@ -13,12 +13,13 @@ distribution_type:  module
 configure_requires:
     ExtUtils::MakeMaker:  0
 requires:
+    autodie:         0
     Carp:            0
     constant:        0
-    Cwd:             2.12
-    Data::Dumper:    2.102
-    File::Basename:  2.6
-    FindBin:         1.44
+    Cwd:             0
+    Data::Dumper:    0
+    File::Basename:  0
+    FindBin:         0
     MIME::Lite:      3
     strict:          0
     Symbol:          0

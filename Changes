@@ -2,6 +2,14 @@
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 
+3.02 Wed Dec 24 13:05:32 EST 2008
+
+- Clean up group handling.
+- Clean up whitespace handling.
+- Simplify loops for building que elements prior
+  to breaking them out into separate sub's.
+- Add autodie to requisites.
+
 3.01 Tue Dec 23 12:59:47 EST 2008
 
 - Modify regex to handle splitting up standalone
