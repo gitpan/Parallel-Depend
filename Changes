@@ -2,6 +2,10 @@
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 
+3.03 Sat Dec 27 15:00:13 EST 2008
+
+- Check in test changes.
+
 3.02 Wed Dec 24 13:05:32 EST 2008
 
 - Clean up group handling.

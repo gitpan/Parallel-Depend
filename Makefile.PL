@@ -8,7 +8,7 @@ WriteMakefile
 (
 	NAME	=> "Parallel::Depend",
 
-    VERSION	=> '3.02',
+    VERSION	=> '3.03',
 
 	ABSTRACT	=>
 'Parallel process startup with dependencies and restart.

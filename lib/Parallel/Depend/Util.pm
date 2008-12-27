@@ -1,5 +1,5 @@
 ########################################################################
-# Parallel::Depend::Utilities shared utilities.
+# Parallel::Depend::Util shared utilities.
 # these include logging, notification, and standard output formats.
 ########################################################################
 
@@ -631,13 +631,13 @@ __END__
 
 =head1 TITLE
 
-Parallel::Depend::Utilities
+Parallel::Depend::Util
 
 Kitchen-sink module for configuratin, logging, whatever...
 
 =head1 SYNOPSIS
 
-	use Parallel::Depend::Utilities;
+	use Parallel::Depend::Util;
 
 	# generate path relative to the #!'s $Bin directory.
 	# these can be abs-pathed without regard to the

@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Parallel-Depend
-version:            3.02
+version:            3.03
 abstract:           Parallel process startup with dependencies and restart.
 Execute, Config, Utilities modules simplify generating
 #! code for running queues including logging, email
