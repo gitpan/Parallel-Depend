@@ -15,8 +15,6 @@ qw
     depend
     dequeue
     complete
-    status
-    alias
     restart
     force
     noabort
@@ -32,7 +30,6 @@ qw
     runjob
     unalias
     shellexec
-    sched_list
     group
     subque
     prepare

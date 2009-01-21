@@ -2,9 +2,16 @@
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 
+3.04 Mon Jan 19 16:44:06 EST 2009
+
+- Minor code & doc cleanups.
+
+- Handle prefixes a bit more gracefully by
+  defaulting the initial prefix to basename $0.
+
 3.03 Sat Dec 27 15:00:13 EST 2008
 
-- Check in test changes.
+- Regex Typo.
 
 3.02 Wed Dec 24 13:05:32 EST 2008
 

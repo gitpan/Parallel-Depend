@@ -13,7 +13,7 @@ use strict;
 use warnings;
 use feature qw( :5.10 );
 
-our $VERSION=1.00;
+our $VERSION=1.01;
 
 use Carp;
 use Data::Dumper;

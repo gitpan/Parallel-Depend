@@ -4,7 +4,7 @@ Makefile.PL
 README
 lib/Parallel/Depend.pm
 lib/Parallel/Depend/Util.pm
-t/00-ParallelDepend.t
-t/00-ParallelDependUtils.t
+t/00-Parallel-Depend.t
+t/01-Parallel-Depend-Utils.t
 t/01-existing-object.t
 META.yml                                 Module meta-data (added by MakeMaker)

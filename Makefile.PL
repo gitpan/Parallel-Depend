@@ -1,4 +1,4 @@
-use v5.10.0;
+use 5.006;
 use ExtUtils::MakeMaker;
 
 # See lib/ExtUtils/MakeMaker.pm for details of how to influence
@@ -8,7 +8,7 @@ WriteMakefile
 (
 	NAME	=> "Parallel::Depend",
 
-    VERSION	=> '3.03',
+    VERSION	=> '3.04',
 
 	ABSTRACT	=>
 'Parallel process startup with dependencies and restart.
@@ -24,16 +24,14 @@ paths relative to the execution directory paths via tokens .',
 		# hurt to check... Symbol is core as of 5.8.
 
 		Carp			=> 0,
-		Cwd				=> 0,
-		Data::Dumper	=> 0,
-		File::Basename	=> 0,
-		FindBin			=> 0,
-		Symbol			=> 0,
-
-        autodie         => 0,
 		constant		=> 0,
 		strict			=> 0,
+		Symbol			=> 0,
 
+		Data::Dumper	=> 0,
+		File::Basename	=> 0,
+
+		FindBin			=> 0,
         MIME::Lite      => 3.0,
 	},
 );
