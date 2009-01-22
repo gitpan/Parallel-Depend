@@ -10,7 +10,7 @@ local $\ = "\n";
 local $, = "\n\t";
 local $| = 1;
 
-our $VERSION = 2.10;
+our $VERSION = 2.11;
 
 use strict;
 use feature qw( :5.10 );
@@ -112,7 +112,7 @@ my %defaultz =
     # aliased in mutiple groups.
 
     group   => '',
-    prefix  => '',
+    prefix  => ( basename $0, '.pl', '.pm', '.t' ),
 );
 
 # que data.
@@ -326,7 +326,9 @@ sub precheck
 
     my $verbose = $mgr->verbose > 1;
 
-    my $base    = '/' . $que->{ prefix } . '-' . $job;
+    my $attrz   = $que->{ attrib };
+
+    my $base    = '/' . $attrz->{ prefix } . '-' . $job;
 
     log_message "Precheck: $job ($base)" if $verbose;
 
@@ -720,8 +722,10 @@ sub group
     # caller gets back the result of running the schedule,
     # which should be false.
 
-    local $que->{ group  }  = $name;
-    local $que->{ prefix }  = $que->{ prefix } . $name . '-';
+    my $attrz  = $que->{ attrib };
+
+    local $attrz->{ group  }  = $name;
+    local $attrz->{ prefix }  = $attrz->{ prefix } . '-' . $name;
 
     $mgr->subque( sched => $sched )->validate->execute
 }
@@ -745,7 +749,7 @@ sub subque
         {
             # assume it's a list that can be safely assigned to a hash.
 
-            { @_ }
+            +{ @_ }
         }
         elsif( 'ARRAY' eq ( my $type = reftype $_[0] ) )
         {
@@ -809,24 +813,6 @@ sub new
     }
 
     $mgr
-}
-
-# extract the various types of data from the schedule input.
-
-sub extract_attrib
-{
-}
-
-sub extract_alias
-{
-}
-
-sub extract_group
-{
-}
-
-sub extract_depend
-{
 }
 
 sub prepare
@@ -1055,10 +1041,12 @@ sub prepare
 
             log_message "Checking: $dir ($_)" if $verbose;
 
-            -e $dir or die "Non-existant:  $dir";
-            -w _    or die "Un-writable:   $dir";
-            -r _    or die "Un-readable:   $dir";
-            -x _    or die "Un-executable: $dir";
+            -e $dir or mkdir $dir
+            or log_fatal "Failed mkdir: $!";
+
+            -w $dir or log_fatal "Un-writable:   $dir";
+            -r _    or log_fatal "Un-readable:   $dir";
+            -x _    or log_fatal "Un-executable: $dir";
         }
 
         $attrz->{ maxjob } >= 0
@@ -1430,9 +1418,6 @@ sub execute
     local $| = 1;
 
     my ( $mgr, $que )   = &mgr_que;
-
-    croak "\n$$: Bogus execute: this que has already executed."
-    if( $que->{ executed } );
 
     # after execute has been called once the que cannot be
     # re-run since the queued array has been consumed.
@@ -1977,12 +1962,6 @@ sub execute
         }
     }
 
-    # avoid running the que multiple times. simpler to
-    # catch this at the beginning since it has fewer
-    # side effects.
-
-    $que->{ executed } = 1;
-
     my $after   = Benchmark->new;
     my $time    = timestr timediff $prior, $after;
 
@@ -2097,7 +2076,7 @@ Parallel::Depend
     # to dispatch methods if $mgr->can( 'jobname' ).
     #
     # the manager object is not modified within
-    # Schedule::Depend and can be any reftype
+    # Parallel::Depend and can be any reftype
     # useful to the derived class.
     #
     # if prepare is passed an unblessed first
@@ -2106,7 +2085,7 @@ Parallel::Depend
     # result after preparing the schedule .
 
     package My::Class;
-    use base qw( Schedule::Depend );
+    use base qw( Parallel::Depend );
 
     sub new
     {

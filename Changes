@@ -2,6 +2,22 @@
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 
+3.05 Thu Jan 22 18:49:29 EST 2009
+
+- Push the prefix into attributes to simplify handling
+  during group/subqueue. This puts all of the inherited
+  items into @inherit.
+
+- Add tests for existing .pid, .out, .err files in 
+  t/0[12]*t.
+
+- Update POD for changes since Schedule::Depend was
+  retired in favor of "Parallel::Depend".
+
+- Remove 'executed' flag: it caused too much confusion
+  when used with subque and groups. The precheck method
+  deals with this gracefully enough at this point.
+
 3.04 Mon Jan 19 16:44:06 EST 2009
 
 - Minor code & doc cleanups.

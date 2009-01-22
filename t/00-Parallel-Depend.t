@@ -25,10 +25,6 @@ my @methodz
     subque
     construct
     new
-    extract_attrib
-    extract_alias
-    extract_group
-    extract_depend
     prepare
     validate
     execute
