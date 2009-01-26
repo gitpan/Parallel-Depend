@@ -1,11 +1,10 @@
 --- #YAML:1.0
 name:               Parallel-Depend
-version:            3.05
+version:            3.06
 abstract:           Parallel process startup with dependencies and restart.
-Execute, Config, Utilities modules simplify generating
-#! code for running queues including logging, email
-notification, file read/write, and generation of absolute
-paths relative to the execution directory paths via tokens .
+Manager object can dispatch perl methods or functions,
+shell, or code blocks from the schedule.
+
 author:
     - Steven Lembark <lembark@wrkhors.com>
 license:            unknown
@@ -13,14 +12,21 @@ distribution_type:  module
 configure_requires:
     ExtUtils::MakeMaker:  0
 requires:
+    autodie:         0
+    Benchmark:       0
     Carp:            0
-    constant:        0
     Data::Dumper:    0
+    Date::Format:    0
+    feature:         0
     File::Basename:  0
-    FindBin:         0
+    FindBin:         1.37
     MIME::Lite:      3
+    Scalar::Util:    0
+    Storable:        0
     strict:          0
     Symbol:          0
+    vars:            0
+    warnings:        0
 no_index:
     directory:
         - t

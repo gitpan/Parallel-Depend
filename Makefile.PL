@@ -1,4 +1,4 @@
-use 5.006;
+use v5.10.0;
 use ExtUtils::MakeMaker;
 
 # See lib/ExtUtils/MakeMaker.pm for details of how to influence
@@ -8,31 +8,38 @@ WriteMakefile
 (
 	NAME	=> "Parallel::Depend",
 
-    VERSION	=> '3.05',
+    VERSION	=> '3.06',
 
-	ABSTRACT	=>
-'Parallel process startup with dependencies and restart.
-Execute, Config, Utilities modules simplify generating
-#! code for running queues including logging, email
-notification, file read/write, and generation of absolute
-paths relative to the execution directory paths via tokens .',
+	ABSTRACT	=> <<'END',
+Parallel process startup with dependencies and restart.
+Manager object can dispatch perl methods or functions,
+shell, or code blocks from the schedule.
+END
 
 	AUTHOR     	=> 'Steven Lembark <lembark@wrkhors.com>',
 	PREREQ_PM	=> 
 	{
-		# unlikely these aren't avaialble, but can't 
-		# hurt to check... Symbol is core as of 5.8.
+        # core modules: whatever came with perl
+        # should be usable
 
-		Carp			=> 0,
-		constant		=> 0,
-		strict			=> 0,
-		Symbol			=> 0,
+        autodie         => 0,
+        feature         => 0,
+        strict          => 0,
+        vars            => 0,
+        warnings        => 0,
 
-		Data::Dumper	=> 0,
-		File::Basename	=> 0,
+        Benchmark       => 0,
+        Carp            => 0,
+        Data::Dumper    => 0, 
+        Date::Format    => 0,
+        File::Basename  => 0,
+        Scalar::Util    => 0,
+        Storable        => 0,
+        Symbol          => 0,
 
-		FindBin			=> 0,
+        # these aren't core, the versions matter.
+
+        FindBin         => 1.37,
         MIME::Lite      => 3.0,
 	},
 );
-
