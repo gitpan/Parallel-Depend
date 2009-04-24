@@ -9,20 +9,33 @@
 
 package Parallel::Depend::Util;
 
+use v5.10.0;
 use strict;
-use warnings;
-use feature qw( :5.10 );
+use subs qw( log_format );
 
-our $VERSION=1.01;
+our $VERSION=1.02;
 
 use Carp;
 use Data::Dumper;
 use File::Basename;
+use MIME::Lite;
 use Symbol;
 
+use File::Spec::Functions   qw( splitpath catpath splitdir catdir );
+
+use Cwd             qw( abs_path );
 use FindBin         qw( $Bin );
 use Date::Format    qw( time2str );
+use List::Util      qw( reduce );
 use Scalar::Util    qw( blessed );
+
+# avoid listing log_fatal, etc, as sources for errors.
+
+push @::CARP_NOT, __PACKAGE__;
+
+########################################################################
+# package variables 
+########################################################################
 
 ########################################################################
 # exported subs
@@ -31,72 +44,60 @@ use Scalar::Util    qw( blessed );
 # deal with use. basic issue is to pollute the caller's
 # namespace with our subs.
 
-*import
-= do
+our @exportz
+= qw
+(
+    log_format
+    log_output
+    log_message
+    log_error
+    log_warning
+    log_fatal
+    send_mail
+    progress_mail
+    nastygram
+    localpath
+    gendir
+    genpath
+    checkdir
+);
+
+sub import
 {
-    # stuff the subroutine names into the callers
-    # package space.
+    my $package = shift;
+    my $caller  = caller;
 
-    my @defaultz
-    = qw
-    (
-        log_message
-        log_fatal
-        log_error
-        log_warning
-        log_format
-
-        handle_que_args
-
-        send_mail
-        nastygram
-
-        localpath
-        checkdir
-
-        slurp
-        splat
-    );
-
-    my %exportz
-    = map
+    my $exportz
+    = do
     {
-        my $sub = __PACKAGE__->can( $_ )
-        or die __PACKAGE__ . "cannot $_";
+        my $ref = qualify_to_ref 'exportz', $package;
 
-        ( $_ => $sub )
+        *{ $ref }{ ARRAY };
     }
-    @defaultz;
+    or die "Bogus import: $package has no exports";
 
-    sub
+    for( @_ ? @_ : @$exportz )
     {
-        shift;  # discard this package.
-
-        my $caller  = caller;
-
-        for( @_ ? @_ : @defaultz )
+        when( @$exportz )
         {
-            when( %exportz )
-            {
-                my $ref = qualify_to_ref $_, $caller;
+            my $ref = qualify_to_ref $_, $caller;
 
-                if( *{ $ref }{ CODE } )
-                {
-                    warn "Skip existing '$_' in $caller";
-                }
-                else
-                {
-                    *$ref   = $exportz{ $_ };
-                }
+            if( *{ $ref }{ CODE } )
+            {
+                warn "Skip existing '$_' in $caller";
             }
-
-            default
+            else
             {
-                croak "Bogus import: '$_' ($caller) not exported";
+                *$ref   = $package->can( $_ );
             }
         }
+
+        default
+        {
+            croak "Bogus import: '$_' ($caller) not exported";
+        }
     }
-};
+}
 
 ########################################################################
 # package variables
@@ -111,13 +112,14 @@ our $defaultz = {};
 # standardize log messages format.
 # message arives in @_.
 
-{ # isolate $msgseq, etc.
-
+*log_format
+= do
+{
     my $tz      = $ENV{TZ} || '';
     my $time    = '';
     my $msgseq  = 0;
 
-    sub log_format
+    sub
     {
         local $Data::Dumper::Purity           = 1;
         local $Data::Dumper::Terse            = 1;
@@ -125,58 +127,54 @@ our $defaultz = {};
         local $Data::Dumper::Deepcopy         = 0;
         local $Data::Dumper::Quotekeys        = 0;
 
-        my $caller
-        = do
+        # handle accidentally treating this as a method.
+
+        blessed $_[0] and shift;
+
+        # i.e., iso8601
+
+        my $time    = time2str '%Y.%m.%dT%TZ', time, 'GMT';
+
+        my $header = join ' ', $$, ++$msgseq, $time;
+
+        $header .= "\t" . shift
+        unless ref $_[0];
+
+        # prefixing lines with a newline reduces
+        # the number of "floading" lines on the
+        # display and reduces intermingling of 
+        # messages.
+
+        if( @_ )
         {
-            if( my $class = blessed $_[0] )
+            join "\n", '',
+            map
             {
-                # use an object's class as the caller, 
-                # discard the object.
-
-                shift;
-
-                $class
+                ref $_ ? Dumper $_ : $_
             }
-            else
-            {
-                caller 2
-            }
-        };
-
-        my $time    = time2str '%Y.%m.%d %H:%M:%S', time, 'GMT';
-
-        my $header = join ' ', $$, ++$msgseq, $time, $caller;
-
-        join "\n",
-        map
-        {
-            ref $_ ? Dumper $_ : $_
+            ( $header, @_, '' )
         }
-        ( $header, @_, '', '' )
+        else
+        {
+            $header . "\n"
+        }
     }
+};
 
-    sub log_warning { carp      &log_format }
-    sub log_fatal   { confess   &log_format }
+sub log_output
+{
+    my $fh  = shift;
 
-    # log to stderr, selected fh.
+    print $fh &log_format;
 
-    sub log_error
-    { 
-        print STDERR &log_format;
-
-        return
-    }
-
-    sub log_message
-    {
-        local $| = 1;
-        local $\;
-
-        print &log_format;
-
-        return
-    }
+    return
 }
+
+sub log_message { print STDOUT  &log_format }
+sub log_error   { print STDERR  &log_format }
+
+sub log_warning { carp          &log_format }
+sub log_fatal   { confess       &log_format }
 
 ########################################################################
 # email notification
@@ -188,8 +186,6 @@ our $defaultz = {};
 
 sub send_mail
 {
-    use MIME::Lite;
-
     my %mailargz = ref $_[0] ? %{$_[0]} : @_;
 
     unless( $mailargz{To} )
@@ -248,8 +244,6 @@ sub progress_mail
 {
     my $que = shift
     or croak "Bogus progress_mail: missing que object";
-
-    $DB::single = 1 if $que->debug;
 
     my $job = shift
     or croak "Bogus notify: missing job argument";
@@ -323,7 +317,7 @@ sub nastygram
 
     $subject =~ s/^/[$fatal]/ unless $subject =~ /^\[/;
 
-    my $message = log_format @_;
+    my $message = &log_format;
 
     my $mailargz =
     {
@@ -343,41 +337,6 @@ sub nastygram
 
     die send_mail $mailargz;
 }
-
-########################################################################
-# generic argument handler. this can be called from anything queued
-# to get back the que or config objects:
-#
-#   my ( $config ) = &handle_que_args;
-#
-# or
-#
-#   my ( $que, $config ) = &handle_que_args;
-########################################################################
-
-sub handle_que_args
-{
-    # catch: the debugger adds a level onto the stack,
-    # which can make things a bit flakey here.
-    # fix is to walk up the caller tree until something
-    # isn't in Parallel::Depend.
-
-    my $pkg = (caller 0)[0];
-    my $sub = (caller 1)[3];
-
-    my $que = shift
-    or croak "Bogus $sub: missing queue object";
-
-    log_message "Entering: $sub", \@_;
-
-    my $config = $que->moduleconfig( $pkg )
-    or croak "Bogus $sub: no configuration information";
-
-    $DB::single = 1 if $que->debug;
-
-    ( $que, $config )
-};
-
 
 ########################################################################
 # directory operations
@@ -430,197 +389,34 @@ sub localpath
 # validate/create a directory.
 # default mods are 02775.
 
+sub gendir
+{
+    abs_path
+    reduce
+    {
+        $a  = catdir $a, $b;
+
+        -e $a || mkdir $a, 02755
+        or confess "Failed mkdir: $a, $!", \@_;
+
+        $a
+    }
+    splitdir catdir @_
+}
+
+sub genpath
+{
+    my ( $vol, $dir, $base ) = splitpath $_[0];
+
+    catpath $vol, ( gendir $dir ), $base
+}
+
 sub checkdir
 {
-    for my $path ( @_ )
-    {
-        -e $path || mkdir $path, 02775
-            or die "Roadkill: unable to find/create $path";
+    -e or gendir $_ for @_;
 
-        # at this point the directory should exist
-        # and be accessable. since it may have been
-        # created on the last step at least one more
-        # file test operator has to give the path to
-        # force a stat.
-
-        -e $path    or die "Roadkill: non-executable: $path";
-        -d _        or die "Roadkill: non-directory: $path";
-        -x _        or die "Roadkill: non-executable: $path";
-        -w _        or die "Roadkill: non-writeable: $path";
-        -r _        or die "Roadkill: non-readable: $path";
-    }
+    return
 }
-
-
-########################################################################
-# un-dump data.
-#
-# read dumper Dumper output back into a scalar.
-# caller gets back the result of string-eval of
-# the file contents.
-#
-# adding '.dump' allows passing in sql keys
-# used in unload as basenames.
-
-sub slurp
-{
-    my $path = shift
-    or croak "Bogus slurp: missing path";
-
-    # check the standard alternates from splat if
-    # the path passed in does not exist.
-
-    unless( -e $path )
-    {
-        $path = join '', ( fileparse $path, qr{\.\w+} )[1,0];
-
-        -e $path . $_ and $path .= $_ for( qw(.dump .tsv) );
-    }
-
-    -e $path    or nastygram "Missing $path";
-    -r _        or nastygram "Unreadable $path";
-    -s _        or nastygram "Empty $path";
-
-    open my $fh, '<', $path
-    or nastygram "$path: $!";
-
-    local $/;
-
-    defined ( my $item = <$fh> )
-    or nastygram "Failed read on non-empty: $path";
-
-    # if the result can be eval-ed into a defined value
-    # then hand that back. otherwise split it on newlines
-    # split the contents on tabs and hand back an array-
-    # of-arrays ref.
-
-    if( my $result = eval $item )
-    {
-        $result
-    }
-    else
-    {
-        my @data = map { [ split /\t/ ] } split "\n", $item;
-
-        \@data
-    }
-}
-
-# write out data in a format that can be slurped.
-# main issue is ensuring that the extensions match.
-
-sub splat_fh
-{
-    my $name = shift
-    or die "Bogus splat_fh: missing name";
-
-    # this might usefully be false.
-
-    defined ( my $ext = shift )
-    or die "Bogus splat_fh: missing extension";
-
-    my $path = localpath $name;
-
-    my ( $base, $dir ) = (fileparse $path, qr{\.\w+} )[0,1];
-
-    $path = join '', $dir, $base, $ext;
-
-    log_message "Opening $name -> $path";
-
-    open my $fh, '>', $path
-    or die "$path: $!";
-
-    $fh
-}
-
-sub splat
-{
-    my $name = shift
-    or croak "Bogus write_dump: missing name";
-
-    my $data = shift
-    or croak "Bogus write_dump: missing data referent";
-
-    if( defined eval { scalar @$data } )
-    {
-        local $\ = "\n";
-        local $, = "\t";
-
-        my $fh = splat_fh $name, '.tsv';
-
-        my $test = $data->[0];
-
-        if( defined eval { @$test } )
-        {
-            print $fh @$_ for @$data;
-        }
-        else
-        {
-            print $fh "$_" for @$data;
-        }
-    }
-    elsif( defined eval { scalar %$data } )
-    {
-        if( keys %$data < 1000 )
-        {
-            local $Data::Dumper::Purity           = 1;
-            local $Data::Dumper::Terse            = 1;
-            local $Data::Dumper::Indent           = 1;
-            local $Data::Dumper::Deepcopy         = 0;
-            local $Data::Dumper::Quotekeys        = 0;
-
-            my $fh = splat_fh $name, '.dump';
-
-            print $fh Dumper $data
-        }
-        else
-        {
-            local $\ = "\n";
-            local $, = "\t";
-
-            my $fh = splat_fh $name, '.tsv';
-
-            # print arrays out tab separated.
-            # other than that assume whatever
-            # is there will be a simple value
-            # or something that can successfully
-            # stringify itself.
-
-            my $test = (values %$data)[0];
-
-            if( defined eval{ @$test } )
-            {
-                print $fh $a, @$b
-                while( ($a,$b) = each %$data );
-            }
-            else
-            {
-                print $fh $a, "$b"
-                while( ($a,$b) = each %$data );
-            }
-        }
-    }
-    else
-    {
-        # not an array or hash: assume Dumper knows
-        # how to deal with it...
-
-        local $Data::Dumper::Purity           = 1;
-        local $Data::Dumper::Terse            = 1;
-        local $Data::Dumper::Indent           = 1;
-        local $Data::Dumper::Deepcopy         = 0;
-        local $Data::Dumper::Quotekeys        = 0;
-
-        my $fh = splat_fh $name, '.dump';
-
-        print $fh Dumper $data;
-    }
-
-    # not much to hand  back
-
-    0
-}
-
 
 ########################################################################
 # keep require happy
@@ -854,7 +650,7 @@ Steven Lembark, Workhorse Computing <lembark@wrkhors.com>
 
 =head1 See Also
 
-Parallel::Depend Parallel::Depend::Execute Parallel::Depend::Config
+Parallel::Depend
 
 =head1 Copyright
 

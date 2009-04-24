@@ -4,7 +4,22 @@ Makefile.PL
 README
 lib/Parallel/Depend.pm
 lib/Parallel/Depend/Util.pm
+t/00-Parallel-Depend-Util.t
 t/00-Parallel-Depend.t
-t/01-Parallel-Depend-Utils.t
-t/01-existing-object.t
-META.yml                                 Module meta-data (added by MakeMaker)
+t/01-existing-object-fork.t
+t/01-existing-object-nofork.t
+t/02-simple-depend-fork.t
+t/02-simple-depend-nofork.t
+t/03-simple-alias.t
+t/04-simple-group-fork.t
+t/04-simple-group-nofork.t
+t/05-nested-group-nofork.t
+t/06-multiple-jobs-fork.t
+t/06-multiple-jobs-nofork.t
+t/07-multiple-groups-fork.t
+t/07-multiple-groups-nofork.t
+t/08-multi-level-groups-fork.t
+t/08-multi-level-groups-nofork.t
+t/10-many-jobs-fork.t
+t/10-many-jobs-nofork.t
+META.yml

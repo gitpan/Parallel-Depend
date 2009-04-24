@@ -8,7 +8,7 @@ WriteMakefile
 (
 	NAME	=> "Parallel::Depend",
 
-    VERSION	=> '3.06',
+    VERSION	=> '4.00',
 
 	ABSTRACT	=> <<'END',
 Parallel process startup with dependencies and restart.
@@ -22,24 +22,27 @@ END
         # core modules: whatever came with perl
         # should be usable
 
-        autodie         => 0,
-        feature         => 0,
-        strict          => 0,
-        vars            => 0,
-        warnings        => 0,
+        autodie                 => 0,
+        strict                  => 0,
+        subs                    => 0,
+        vars                    => 0,
 
-        Benchmark       => 0,
-        Carp            => 0,
-        Data::Dumper    => 0, 
-        Date::Format    => 0,
-        File::Basename  => 0,
-        Scalar::Util    => 0,
-        Storable        => 0,
-        Symbol          => 0,
+        Benchmark               => 0,
+        Carp                    => 0,
+        Cwd                     => 0,
+        Data::Dumper            => 0,
+        Date::Format            => 0,
+        File::Basename          => 0,
+        File::Spec::Functions   => 0,
+        FindBin                 => 0,
+        IO::File                => 0,
+        List::Util              => 0,
+        Scalar::Util            => 0,
+        Storable                => 0,
+        Symbol                  => 0,
 
         # these aren't core, the versions matter.
 
-        FindBin         => 1.37,
         MIME::Lite      => 3.0,
 	},
 );

@@ -2,6 +2,77 @@
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 
+4.00 Mon Mar 23 11:01:50 EDT 2009
+
+- use v5.10;
+
+- Adding nested groups required a full re-write
+  of the guts. The groups are parsed completely,
+  including nesting, during prepare. This means
+  that there are no more delayed-effects from 
+  parsing groups. This now allows the groups
+  to be handled without a separate fork, so the
+  maxjobs applies across multiple groups running
+  at the same time.
+
+  Keeping the group items in on place required
+  adding a namespace for jobs within groups --
+  the older method hid the groups from one 
+  another via forks. This leaves the keys for
+  job, alias, attribute, etc, entries looking
+  like $que->{ $namespace, $job }. The default
+  (global) namespace is an empty string, successive
+  levels of groups are appended to their parent
+  namespace to get their own.
+
+  The namespace and name can be taken from:
+
+      my $i         = rindex $fullname, $Parallel::Depend::job_id_sep;
+      my $namespace = substr $fullname, 0, $i;
+      my $name      = substr $fullname, $i+2;
+
+  the separator variable is a read-only copy of 
+  $; (which gets messy in syntax use).
+
+  Namespaces are also used to generate log and
+  runfiles, with the $; replaced with '-'.
+  
+- Same basic interface, saner logging,
+  nested groups. Also the parser and pieces of the
+  execution engine were broken out into smaller
+  chunks for easier viewing. 
+
+  The main external differences are that the run
+  files include a timestamp and the log files 
+  use a group-nested namespace for everything.
+  Logging also includes the namespace (i.e., 
+  nested group) for all jobs to uniquely 
+  identify them (i.e. no more collisions between
+  job names in separate groups). Unneeded subs
+  were also stripped from P::D::Util (see
+  00* tests for quick list of public methods).
+
+  Dependencies between groups are also a bit 
+  more reliable with group namespaces for the
+  jobs.
+
+  More, smaller tests give a better illustration
+  of how to use the code.
+
+  This also leaves the queue structure suitable
+  for persistence management via DBM::Deep, which
+  would allow simpler restarts without depending
+  on the local filesystem for bookkeeping.
+
+3.07 Wed Jan 28 16:15:58 EST 2009
+
+- Update META.yaml, minor cleanups.
+- use fileparse to strip directory, suffix from 
+  job before generating pidfile. this allows 
+  rooted paths to be used as job specifiers.
+
+- POD
+
 3.06 Sun Jan 25 19:48:58 EST 2009
 
 - Put autodie into Makefile.PL

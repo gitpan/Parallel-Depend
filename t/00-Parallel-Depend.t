@@ -8,25 +8,21 @@ my $module  = 'Parallel::Depend';
 my @methodz
 = qw
 (
-    mgr_que
-    install_que
-    remove_que
-    failure
+    initial_queue
+    active_queue
+    active_attrib
+    active_alias
+    run_message
+    prepare
+    precheck
+    validate
+    unalias
+    runjob
+    shellexec
     queued
-    ready
-    depend
+    runnable
     dequeue
     complete
-    precheck
-    runjob
-    unalias
-    shellexec
-    group
-    subque
-    construct
-    new
-    prepare
-    validate
     execute
 );
 

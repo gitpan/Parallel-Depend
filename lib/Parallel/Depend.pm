@@ -4,40 +4,19 @@
 
 package Parallel::Depend;
 
-# prettify messages during compile.
-
-local $\ = "\n";
-local $, = "\n\t";
-local $| = 1;
-
-our $VERSION = 2.11;
-
+use v5.10.0;
 use strict;
-use feature qw( :5.10 );
+use vars qw( $job_id_sep );
+use autodie qw( open close );
 
-use vars qw( $CLEAN $ABORT );
-use autodie qw( open close seek write );
-
-# values for $que->{ skip }{ $job }:
-#
-#   $CLEAN is is used in restart mode to flag jobs that have
-#   completed cleanly and don't need to be rerun.
-#
-#   $ABORT flags jobs with a failed dependency that are being
-#   skipped because they cannot be run. their waitfor entries
-#   will be flagged with ABORT also.
-
-*CLEAN  = \1;
-*ABORT  = \-1;
-
-use Benchmark;
-use Carp;
-use Data::Dumper;
 use File::Basename;
+use IO::File;
 
-use Scalar::Util    qw( blessed looks_like_number refaddr reftype );
+use Benchmark       qw( :hireswallclock );
+use Cwd             qw( abs_path );
+use Scalar::Util    qw( blessed looks_like_number refaddr );
 use Storable        qw( dclone );
-use Symbol          qw( qualify_to_ref      );
+use Symbol          qw( qualify_to_ref );
 
 use Parallel::Depend::Util;
 
@@ -45,614 +24,1059 @@ use Parallel::Depend::Util;
 # package variables
 ########################################################################
 
-# elements of a parent que that are copied into the subque.
-# the attributes are managed by S::D, the user section is
-# for whatever payload data users want to insert.
+our $VERSION = v4.0.0;
 
-my @inherit = qw( attrib alias );
-
-# default attribute values.
-
-my %defaultz =
-(
-    # i.e., don't choke the number of parallel jobs,
-    # dependencies determine the number of parallel
-    # jobs.
-    #
-    # change this to 1 for serial behavior.
-
-    maxjob  => 0,
-
-    # nofork runs all of the jobs at simple subroutine
-    # calls. this behaves as though majob == 1 but won't
-    # mess up the debugger.
-    #
-    # debug mode runs with minimum verbosity of 1.
-    #
-    # force ignores all pidfiles -- both empty ones
-    # guarding jobs and ones with zero exits in them.
-    #
-    # restart obeys empty pidfiles and stubs out execution
-    # of jobs whose pidifles show a zero exit status.
-    #
-    # if abort is true then the que behaves like make:
-    # aborting all jobs if any one of them fails; setting
-    # abort to false causes the que to behave like "make -k":
-    # completing any portions of the que that do not depend
-    # on a failed job before exiting.
-
-    verbose =>  0,
-
-    nofork  => '',
-
-    force   => '',
-    restart => '',
-    abort   =>  1,
-
-    # true forces alias to use methods, allows class to
-    # handle job dispatch for itself via autoload
-    # if one is present.
-
-    autoload    => '',
-
-    # avoid writing to .err and .out files, just use STDOUT
-    # and STDERR. mainly for debugging. the .out and .err
-    # files are truncated to avoid leaving around stale data.
-
-    ttylog  => 0,
-
-    # if these are not supplied as arguments or inherited then
-    # prepare will croak.
-
-    logdir  => '',
-    rundir  => '',
-
-    # used to prefix logdir and rundir entries with the
-    # group name to avoid basename collisions for jobs
-    # aliased in mutiple groups.
-
-    group   => '',
-    prefix  => ( basename $0, '.pl', '.pm', '.t' ),
-);
-
-# que data.
-# this largely managed by the sub's below
-# but is also localized by validate
+# inside-out structure for the caller's objects.
 
 my %mgr2que = ();
 
-########################################################################
-# subroutines
-########################################################################
+*job_id_sep = \"$;"; # syntax with $; gets messy...
 
 ########################################################################
-# manage the inside-out data:
+# public interface, fodder for overloading
+########################################################################
+
+########################################################################
+# manage the inside-out values
 #
-#   my ( $mgr, $que ) = &mgr_que
+# initial_queue vs. active_queue: install the virgin structure
+# or check for an existing one and blow up if there isn't.
 #
-# in the methods to strip the manager object
-# off the stack and return the que data with
-# it.
+# active_<whatever> use the current namespace to look up the
+# values (e.g., $que->{ $que->{ namespace }, 'attrib' }.
 #
-# install_que installes the que.
-# destroy cleans it out.
+# validate_attrib is a kitchen-skink/hook for any validation
+# necessary when the attributes are updated.
+#
+# the attributes that make sense to update programatically
+# while the queue is running have accessor/mutator func's
+# installed via loop.
 
-sub mgr_que
+sub initial_queue
 {
-    my $mgr = shift;
-    my $que = $mgr2que{ refaddr $mgr }
-    or confess "Unknown object: '$mgr'";
+    # return the existing que if it exists otherwise
+    # install a que if one is supplied otherwise die.
 
-    wantarray ? ( $mgr, $que ) : $que
-}
-
-sub install_que
-{
-    my ( $mgr, $que )   = @_;
-
-    $que    or confess 'Bogus install que: missing que!';
-    %$que   or confess 'Bogus install que: empty que!';
-
-    $mgr2que{ refaddr $mgr }    = $que
-};
-
-sub remove_que
-{
     my $mgr = shift;
 
-    delete $mgr2que{ refaddr $mgr };
-
-    return
-}
-
-*DESTROY    = \&remove_que;
-
-########################################################################
-# accessors for standard portions of queue object.
-
-for my $attr
-(
-    qw
-    (
-        restart
-        force
-        noabort
-        nofork
-
-        verbose
-        debug
-        sub
-
-        rundir
-        logdir
-    )
-)
-{
-    # read-only access to queue attributes.
-
-    my $ref = qualify_to_ref $attr;
-
-    *$ref
-    = sub
+    my $que =
     {
-        $mgr2que{ refaddr $_[0] }{ attrib }{ $attr }
+        # track sub-schedules used for groups.
+        #
+        # prefix is added before logdir and rundir entries
+        # with the name to avoid basename collisions for jobs
+        # aliased in mutiple groups.
+
+        namespace   => '',
+
+        prefix  => ( basename $0, '.pl', '.pm', '.t' ),
+
+        # defined by the schedule.
+        # { prior }{ $job } => jobs that run prior to $job.
+        # { after }{ $job } => jobs that run after $job.
+        # runnable uses prior; complete uses after.
+
+        before  => {},  # jobs running prior to a job starting
+        after   => {},  # jobs running after a job completes
+        group   => {},  # groups by name
+
+        alias   => {},  # $jobid => alias
+
+        # assembled in prepare to track clean jobs on
+        # restart or failed ones during execution, 
+        # paths for run, log, err files.
+
+        skip    => {},  # job_id => $reason, 0 => clean.
+        files   => {},  # $job_id => [ run, out, err ]
+
+        # flag the schedule as unstarted.
+        # set to true in execute, avoids accidentally
+        # re-running the schedule without re-preparing.
+
+        executed => '',
     };
+
+    $mgr2que{ refaddr $mgr } = $que
 }
 
-for my $name
-(
-    qw
-    (
-        jobz
-        pidz
-    )
-)
+sub active_queue
 {
-    # runtime status; these should probably not
-    # be modified, but there may be a reason so
-    # the references are returned.
+    my $mgr = shift;
 
-    my $ref = qualify_to_ref $name;
+    $mgr2que{ refaddr $mgr }
+    or log_fatal "Bogus active_queue: unknown'$mgr'";
+}
 
-    *$ref
-    = sub
+sub active_alias
+{
+    my $mgr     = shift;
+
+    my $que     = $mgr->active_queue;
+    my $nspace  = $que->{ namespace };
+    
+    # this was installed during preparation.
+
+    $que->{ local }{ $nspace, 'alias' } 
+}
+
+sub active_attrib
+{
+    my $mgr     = shift;
+
+    my $que     = $mgr->active_queue;
+    my $nspace  = $que->{ namespace };
+
+    if( @_ )
     {
-        $mgr2que{ refaddr $_[0] }{ $name }
-    };
-}
-
-sub failure
-{
-    $mgr2que{ refaddr $_[0] }{ failure } || ''
-}
-
-*errstr = \&failure;
-
-########################################################################
-# queue management: check the state, take jobs off the que, check
-# what jobs depend on the current one, handle job completion when
-# the tasks finish.
-#
-# note that dequeue and complete are NOT the same action: jobs must
-# be removed from the queue before they are forked since the queue
-# will be examined multiple times while the job is running.
-
-sub queued
-{
-    my ( $mgr, $que )   = &mgr_que;
-
-    sort keys %{ $que->{ queued } }
-}
-
-sub ready
-{
-    my ( $mgr, $que )   = &mgr_que;
-
-    my $queued  = $que->{ queued };
-
-    sort grep { ! %{ $queued->{ $_ } } }  keys %$queued
-}
-
-sub depend
-{
-    my ( $mgr, $que )   = &mgr_que;
-
-    my $job = shift;
-
-    sort keys %{ $que->{ depend }{ $job } };
-}
-
-########################################################################
-# take a job out of the queue. this is not the same as
-# listing it as complete: jobs must be removed from the
-# queue immediately when they are forked since the que
-# may be examined many times while the job is running.
-#
-# dequeing the job simply removes the job's name from
-# the queued hash.
-#
-# job completion involves:
-#
-#   remove this job from the list of depend list of jobs
-#   that depend on it.
-#
-# note that the queued entry is empty by the time dequeue
-# is called -- the useful information is in the depend
-# list of jobs blocking on this one.
-
-sub dequeue
-{
-    my ( $mgr, $que )   = &mgr_que;
-
-    my $job = shift;
-
-    delete $que->{ queued }{ $job };
-}
-
-sub complete
-{
-    my ( $mgr, $que )   = &mgr_que;
-
-    my $job     = shift;
-
-    my $queued  = $que->{ queued };
-    my $depend  = $que->{ depend };
-
-    delete $que->{ jobid }{ $job };
-
-    delete $queued->{ $_ }{ $job }
-    for @{ $depend->{ $job } };
-
-    return
-}
-
-########################################################################
-# pre-check a queue to ensure that it does not deadlock and that all
-# of the jobs are runnable. this includes creating .out, .err, and
-# .pid files and sanity checking existing pidfile status.
-#
-# this can be overloaded on various O/S to use /proc/blah to
-# get more detailed in its checks. default is to croak on a
-# pidfile w/o exit status.
-
-sub precheck
-{
-    my ( $mgr, $que )   = &mgr_que;
-
-    my $job = shift;
-
-    # this stuff only goes out of the verbosity is
-    # at the "detail" level.
-
-    my $verbose = $mgr->verbose > 1;
-
-    my $attrz   = $que->{ attrib };
-
-    my $base    = '/' . $attrz->{ prefix } . '-' . $job;
-
-    log_message "Precheck: $job ($base)" if $verbose;
-
-    # jobs can be shell paths, strip the directory to get
-    # something valid.
-
-    my $pidfile
-    = $que->{ pidz }{ $job}
-    = $que->{ attrib }{ rundir } . '/' . $base . '.pid';
-    ;
-
-    my $outfile
-    = $que->{ outz }{ $job }
-    = $que->{ attrib }{ logdir } . '/' . $base . '.out'
-    ;
-
-    my $errfile
-    = $que->{ errz }{ $job }
-    = $que->{ attrib }{ logdir } . '/' . $base . '.err'
-    ;
-
-    # $running gets set to true in the if-block if the
-    # job is running.
-    #
-    # $que->{ skip } this gets set to true in the block
-    # below if we are running in restart mode and the
-    # jobs exited zero on the previous pass. setting it
-    # to zero here avoids uninit variable warnings.
-    #
-    # phony jobs never execute, they are placeholders.
-
-    my $running = 0;
-
-    $que->{ skip }{ $job }  = 0;
-
-    $que->{ alias }{ $job } eq 'PHONY'
-    and return 0;
-
-    # any pidfile without an exit status implies a running job
-    # and prevents further execution. in restart mode any file
-    # with a zero exit status will be skipped.
-
-    if( -s $pidfile )
+        %{ $que->{ local }{ $nspace, 'attrib' } }
+        = %{ $mgr->validate_attrib( @_ ) };
+    }
+    else
     {
-        my @linz
-        = do
+        $que->{ local }{ $nspace, 'attrib' } 
+    }
+}
+
+sub validate_attrib
+{
+    my ( undef, $attrz ) = @_;
+
+    # safest deafult is to run the jobs single file
+    # even if they are forked.
+
+    $attrz->{ maxjob  } //= 1;
+    $attrz->{ debug   } //= 0;
+    $attrz->{ verbose } //= 0;
+
+    for( qw( logdir rundir ) )
+    {
+        my $path    = gendir $attrz->{ $_ }
+        or log_fatal "Bogus prepare: unusable '$_' ($attrz->{$_})";
+
+        $attrz->{ $_ } = $path;
+    }
+
+    $attrz->{ nofork  }
+    ||= do
+    {
+        if( $^P && $attrz->{ fork_ttyz } )
         {
-            local $/;
-
-            open my $fh, '<', $pidfile
-            or confess "$$: < $pidfile: $!";
-
-            split /\n/, <$fh>
-        };
-
-        log_message "Pidfile:  $pidfile", \@linz if $verbose;
-
-        if( @linz > 2 )
-        {
-            # the job exited, check the status in case we
-            # are running in restart mode. either way, the
-            # caller gets back false since the jobs isn't
-            # running any longer.
-            #
-            # restart skips anything that exited zero.
-            #
-            # otherwise we can just zero out the pidfile and
-            # keep going.
-
-            log_message "Completed: $job", \@linz if $verbose;
-
-            if( $que->{ attrib }{ restart } )
-            {
-                # take the last exit from the file -- the child
-                # and parent both write the same thing to the
-                # file so whichever the last one is will be
-                # sufficient.
-                #
-                # since a sub return can be any string that
-                # evaluates numerically to zero we have to
-                # use a numeric comparison here for a valid test.
-
-                my( $pid, $cmd, $exit ) = @linz[0,1,-1];
-
-                if( $exit )
-                {
-                    log_message "$job previous non-zero exit, will be re-run"
-                    if $verbose;
-                }
-                else
-                {
-                    # no reason to re-run this job.
-
-                    log_message "Marking job for skip on restart: $job";
-
-                    $que->{ skip }{ $job }  = $CLEAN;
-                }
-            }
-            else
-            {
-                log_message "Not Running:  $job" if $verbose;
-            }
+            ''
         }
-        elsif( $que->{ attrib }{ force } )
+        elsif( $^P )
         {
-            # assume the thing is not running and be done with it.
-            # this gets a message regardless of verbosity.
-
-            log_error "Forcing restart of possibly running job: $job";
+            1
+        }
+        elsif( $attrz->{ maxjob } < 0 )
+        {
+            1
         }
         else
         {
-            # without a completion or force, pidfiles without
-            # an exit are assumed to be running jobs.
+            ''
+        }
+    };
 
-            log_error "Pidfile without exit: $job";
+    # still alive?
+    # then the attributes seem usable.
 
-            $running = 1;
+    $attrz
+}
+
+for my $key
+( qw( verbose debug maxjobs nofork fork_ttys ) )
+{
+    my $ref = qualify_to_ref $key;
+
+    *$ref
+    = sub
+    {
+        my $mgr     = shift;
+        my $que     = $mgr->active_queue;
+
+        my $attrz   = $mgr->active_attrib;
+
+        if( @_ )
+        {
+            local $attrz->{ $key }  = shift;
+
+            $mgr->active_attrib( $attrz );
+        }
+
+        $attrz->{ $key }
+    };
+}
+
+########################################################################
+# parsing mechanism
+########################################################################
+
+# insert this job into the queue with a list of what
+# it depends on.
+#
+# the keys of %$beforz are those jobs
+# with jobs that go before them. They
+# are runnable when all of the
+# dependencies have been complated,
+# i.e., the hash %{ $queued->{job} } is
+# empty.
+#
+# $after->{$job} is an array of the
+# other jobs that will depend on $job
+# completing. This is used to quickly
+# remove entries from
+# $queued->{$anotherjob} when $job
+# completes.
+#
+# for all pratical purposes, keys %$beforz is the
+# "queue" here.
+
+sub precheck
+{
+    my ( $mgr, $nspace, $job ) = @_;
+
+    my $que     = $mgr->active_queue;
+
+    local $que->{ namespace }   = $nspace;
+
+    my $attrz   = $mgr->active_attrib;
+
+    my $prefix  = $que->{ prefix };
+
+    my $force   = $attrz->{ force   };
+    my $restart = $attrz->{ restart };
+    my $usetty  = $attrz->{ ttylog  };
+
+    @{ $que->{ files }{ $nspace, $job } }
+    = map
+    {
+        my ( $type, $ext ) = @$_;
+
+        my $base    = $nspace ? "$prefix.$nspace" : $prefix;
+        my $path    = genpath "$attrz->{ $type }/$base.$job.$ext";
+
+        if( 'run' eq $ext )
+        {
+            if( $force )
+            {
+                # skip the sanity checks
+            }
+            elsif( -e $path )
+            {
+                my @linz
+                = do
+                {
+                    open my $fh, '<', $path;
+
+                    local $/ = "\n";
+
+                    <$fh>
+                };
+
+                # at this point, anything without a
+                # completion is fatal; the difference
+                # is that restart records successful
+                # completions.
+
+                if( @linz < 3 )
+                {
+                    # precheck, no dispatch: looks
+                    # like a running queue.
+
+                    log_fatal "Running queue: $nspace, $job ($path)";
+                }
+                elsif( @linz < 4 )
+                {
+                    # precheck + dispatch, no exit:
+                    # looks like a running job.
+
+                    log_fatal "Running job: $nspace, $job ($path)";
+                }
+                elsif( $restart )
+                {
+                    # record false exits to skip the 
+                    # job on this pass. execute and
+                    # complete use the false skips 
+                    # to stub the job instead of 
+                    # actually running it.
+
+                    chomp( my $exit = $linz[-1] );
+
+                    $exit
+                    or $que->{ skip }{ $nspace, $job } = 0;
+                }
+                else
+                {
+                    # if not restarting a queue, the
+                    # exit status is immaterial if 
+                    # the job completed: do nothing.
+                }
+            }
+
+            # at this point the existing path is 
+            # no longer useful: generate the new
+            # runfile and populate it with the 
+            # precheck data.
+            #
+            # trapping problems opening the files
+            # here saves a LOT of trouble.
+
+            eval
+            {
+                my $fh  = IO::File->new( "> $path" )
+                or die "Roadkill: open '$path', $!\n";
+
+                $fh->printflush( "'$nspace'\n$job\n" )
+                or die "Roadkill: print '$path', $!\n";
+            }
+            or log_fatal $@;
+
+            -e $path
+            or die "Roadkill: missing '$path'\n";
+
+            # at this point the file seems usable.
+
+            $path
+        }
+        elsif( $usetty )
+        {
+            # logfiles are useless if output is going
+            # to the tty: remove them to avoid stale
+            # data on restarts.
+
+            -e $path && unlink $path;
+
+            ()
+        }
+        else
+        {
+            # zero out the log file, also 
+            # sanity checks whether the file
+            # can safely be opened later.
+
+            open my $fh, '>', $path
+            or die "Roadkill: open '$path', $!\n";
+
+            $path
         }
     }
-    elsif
     (
-        -e $pidfile
-        &&
-        ! $que->{ attrib }{ restart }
-        &&
-        ! $que->{ attrib }{ force }
-    )
+        [ rundir => 'run' ],
+        [ logdir => 'out' ],
+        [ logdir => 'err' ],
+    );
+
+    # at this point the job is runnable and has 
+    # the file handles stored for future use.
+
+    return
+}
+
+*prepare
+= do
+{
+    my $verbose = '';
+    my $prepare = '';
+    my $debug   = '';
+
+    # attributes are put aside by namespace
+    # and overlaid onto the current attributes
+    # when a job is dispatched.
+    #
+    # the rest live in a flat namespace by 
+    # { $nspace, $job_id }
+
+    my $add_attrib
+    = sub
     {
-        # jobs with empty pidfiles are assumed to be running
-        # unless the restart or force switches are given.
-        #
-        # Note: on Solaris or Linux this could check things
-        # via /proc or Unix::Process. Occams Razor tells me
-        # to leave this alone until it proves to be a problem.
+        my ( $mgr, $tokenz ) = @_;
+        my $que     = $mgr->active_queue;
+        my $nspace  = $que->{ namespace };
 
-        log_error "Still running: empty $pidfile";
+        log_message "Add attrib: '$nspace'"
+        if $verbose; 
 
-        $running = 1;
-    }
-    else
-    {
-        log_message "No pidfile: $job is not running"
-        if $verbose;
-    }
+        my $attrz
+        = $que->{ local }{ $nspace, 'attrib' }
+        = {};
 
-    # zero out the pid/log/err files if the job isn't running
-    # at this point. leaving this down here makes it simpler
-    # to update the block above if there is more than one way
-    # to decide if things are still running.
-
-    if( $running || $que->{ skip }{ $job } )
-    {
-        log_message "Leaving existing pidfile untouched"
-        if $verbose;
-    }
-    else
-    {
-        # always zero a restarted pidfile, ttylog
-        # skips the .out & .err files.
-
-        open my $pidfh, '>', $pidfile;
-
-        unless( $que->{ attrib }{ ttylog } )
-        {
-            for my $path ( $outfile, $errfile )
+        %$attrz =
+        (
+            %{ $que->{ attrib } },
+            map
             {
-                # zero out the logs if they will be written
-                # to, otherwise leave them alone. This is mainly
-                # a sanity check here, since the forked process
-                # will write to these anyway -- makes more sense
-                # to find out that the log can't be written
-                # before starting the execution however.
-                #
-                # assumption here is that production systems
-                # will usually run consistently with ttylog or
-                # without: usual reason for switching is a test
-                # run that probably shouldn't overwrite any
-                # existing logs.
+                '%' eq $_->[0]
+                ? @{ $_ }[1,2]
+                : ()
+            }
+            @$tokenz
+        );
 
-                    open my $fh, '>', $path
-                    or croak "Failed writing empty $path: $!";
+        # reset the verbosity using the 
+        # current attributes. allows
+        # groups to manage their own 
+        # verbose level.
+
+        $verbose    = $attrz->{ verbose };
+        $debug      = $attrz->{ debug   };
+
+        log_message $attrz
+        if $prepare;
+
+        return
+    };
+
+    my $add_alias
+    = sub
+    {
+        my ( $mgr, $tokenz ) = @_;
+        my $que     = $mgr->active_queue;
+        my $nspace  = $que->{ namespace };
+
+        log_message "Add alias: '$nspace'"
+        if $verbose; 
+
+        my $aliasz
+        = $que->{ local }{ $nspace, 'alias' }
+        = {};
+
+        %$aliasz =
+        (
+            %{ $que->{ alias } },
+            map
+            {
+                '=' eq $_->[0]
+                ? @{ $_ }[1,2]
+                : ()
+            }
+            @$tokenz
+        );
+
+        log_message $que->{ local }{ $nspace, 'alias' }
+        if $prepare;
+
+        return
+    };
+
+    my $add_depend
+    = sub
+    {
+        my ( $mgr, $tokenz ) = @_;
+
+        my $que     = $mgr->active_queue;
+        my $nspace  = $que->{ namespace };
+        my $beforz  = $que->{ before };
+        my $afterz  = $que->{ after  };
+
+        log_message "Add depend: '$nspace'"
+        if $verbose; 
+
+        for( grep { ':' eq $_->[0] } @$tokenz )
+        {
+            log_message 'Processing rule:', $_
+            if $prepare;
+
+            # split up the dependencies into after and
+            # before jobs.
+            #
+            # initial sanity check: none of the after
+            # jobs are in the before list.
+
+            my( $a, $b ) = map { [ split ] } @{ $_ }[1,2];
+
+            $_ ~~ $b
+            and log_fatal "Bogus $nspace: self-dependenent '$_'", $_
+            for @$a;
+
+            # precheck each job once.  this looks
+            # for problems in the external
+            # environment (e.g., running jobs).
+
+            for my $job ( @$a, @$b )
+            {
+                next if exists $beforz->{ $nspace, $job };
+
+                log_fatal "$$: Unrunnable: $job"
+                if $mgr->precheck( $nspace, $job );
+
+                $beforz->{ $nspace, $job }   = {};
+                $afterz->{ $nspace, $job }   = [];
+            }
+
+            # at this point every job in the rule has been
+            # put where we can find it again. now to deal
+            # with the targets.
+            #
+            # assigning $beforz->{ $after_id } guarantees
+            # that the job is in the schedule even if it
+            # has no prior jobs.
+
+            for( @$a )
+            {
+                my $after_id    = join $job_id_sep, $nspace, $_;
+
+                my $ab          = $beforz->{ $after_id } = {};
+
+                for( @$b )
+                {
+                    my $before_id   = join $job_id_sep, $nspace, $_;
+
+                    @{ $ab }{ $before_id } = ();
+
+                    push @{ $afterz->{ $before_id } }, $after_id;
+                }
+            }
+
+            # at this point all jobs are cataloged by what
+            # must run before they can start in
+            # $que->{ before } and which jobs to notify after
+            # it runs in $que->{ after }.
+        }
+
+        log_message 
+        'Before:', $beforz,
+        'After:',  $afterz
+        if $prepare;
+
+        return
+    };
+
+    # groups are skipped as a unit: if the group has
+    # a zero skip value then it is stubbed in the 
+    # schedule and its contents are ignored.
+    #
+    # pre-declare $add_sched to allow recursion 
+    # from $add_groups.
+
+    my $add_sched   = '';
+
+    my $add_groups
+    = sub
+    {
+        my ( $mgr, $tokenz ) = @_;
+
+        my $que     = $mgr->active_queue;
+        my $nspace  = $que->{ namespace };
+
+        my $skipz   = $que->{ skip   };
+        my $afterz  = $que->{ after  };
+        my $beforz  = $que->{ before };
+
+        my $aliasz  = $mgr->active_alias;
+
+        my %groupz  = ();
+
+        log_message "Add groups: '$nspace'"
+        if $verbose; 
+
+        for( grep { '<' eq $_->[0] } @$tokenz )
+        {
+            my ( undef, $group, $syntax )   = @$_;
+
+            # ignore any groups not listed in the
+            # dependencies.
+
+            exists $beforz->{ $nspace, $group }
+            or next;
+
+            exists $skipz->{ $nspace, $group }
+            && 
+            ! $skipz->{ $nspace, $group }
+            or do
+            {
+                # anything that didn't complete successfully
+                # on the last pass needs to be re-run.
+
+                $syntax =~ s{ \s* > $}{}x
+                or log_fatal
+                "Bogus group: '$group' ($nspace) lacks '>' in '$syntax'";
+
+                push @{ $groupz{ $group } }, $syntax;
+
+                # installing these up front at least
+                # leaves all the groups in a given level
+                # with a consistent view of one another.
+
+                $aliasz->{ $group } = 'group';
             }
         }
+
+        log_message \%groupz
+        if $prepare;
+        
+        # pre-install the current namespace's attr's
+        # aliases for re-cycling into the group's own.
+
+        local $que->{ attrib }  = $mgr->active_attrib;
+        local $que->{ alias  }  = $mgr->active_alias;
+
+        GROUP:
+        while( my ( $group, $sched ) = each %groupz )
+        {
+            # run the group: add the name into
+            # this namespace with the 'group'
+            # handler and insert its jobs into
+            # the queue.
+            #
+            # note that this is the one place 
+            # that namespaces are generated:
+            # everyplace else reads $que->{ namespace }
+            # to get the current one or splices
+            # it off the start of $job_id.
+
+            my $group_id    = join $job_id_sep, $nspace, $group;
+
+            local $que->{ namespace }
+            = $que->{ namespace }
+            ? join '.', $que->{ namespace }, $group
+            : $group
+            ;
+
+            log_message "Group: '$group' ($que->{namespace})"
+            if $prepare;
+
+            $add_sched->( $mgr, $sched );
+
+            # catch: the group has to depend on all
+            # of its immediate members, and thus runs
+            # after them. this means that the group
+            # members have to be started before the
+            # group.
+            #
+            # fix:
+            #
+            # - add the group's contents into its
+            #   own before list.
+            # - add the group's before entries
+            #   into its children,
+            # - push the group's contents onto
+            #   the after list of the group's
+            #   own before list.
+            #
+            # this leaves the group's before jobs
+            # enabling the group entries, which
+            # then enable the group.
+
+            my @priorz  = keys %{ $beforz->{ $group_id } };
+
+            my @in_group
+            = do
+            {
+                my $subspace
+                = $que->{ namespace } . $job_id_sep;
+
+                grep
+                {
+                    ! index $_, $subspace
+                }
+                keys %$beforz;
+            };
+
+            # the group runs after its contents.
+
+            @{ $beforz->{ $group_id } }{ @in_group } = ();
+
+            # tie the group to its contents and 
+            # the contents to the group's befores.
+
+            for my $job_id ( @in_group )
+            {
+                push @{ $afterz->{ $job_id } }, $group_id;
+
+                @{ $beforz->{ $job_id } }{ @priorz } = ();
+            }
+
+            # inverse of the previous step: add the group
+            # contents onto the after list of the group.
+
+            for my $before_group ( @priorz )
+            {
+                push @{ $afterz->{ $before_group } }, @in_group;
+            }
+        }
+    };
+
+    $add_sched
+    = sub
+    {
+        my ( $mgr, $sched ) = @_;
+
+        my $que = $mgr->active_queue;
+
+        my @tokenz
+        = map
+        {
+            s{ \s+ }{ }xg;
+
+            # ':' may appear in a perl function definition.
+            # need to specifically look for the surrounding
+            # whitespace.
+
+            s{^ ( \S+? ) [ \t]? : [ \t]? $}{$1 : }x;
+            s{^ ( \S+? ) [ \t]+([=%<])[ \t]+ }{$1 $2 }x;
+
+            # convert:
+            # 'foo : bar'   -> [ qw( : foo bar   ) ]
+            # 'more = less' -> [ qw( = more less ) ]
+            # 'verbose % 2' -> [ qw( % verbose 2 ) ]
+            #
+            # 'x < y = z >' -> [ '<',  'x', 'y = z >' ]
+            #
+            # Yes: this leaves a dangling '>' on the group
+            # definitions that has to get split off in the
+            # group handler (see exampe, above).
+
+            [ ( split m{ \s+ ( [:=%<] ) \s+ }x, $_, 2 )[ 1, 0, 2 ] ]
+        }
+        grep
+        {
+            # strip out obvious whitespace and comment lines
+            # zero-width negative look-behind avoids stripping
+            # any non-comment char's preceeding the comment. 
+
+            s{ (?<![\\])[#] .* $}{}x;
+
+            s{^ \s+  }{}x;
+            s{  \s+ $}{}x;
+
+            m{\S}
+        }
+        ref $sched
+        ? @$sched
+        : ( split /\n/, $sched )
+        ;
+
+        log_message 'Tokens:', \@tokenz
+        if $prepare;
+
+        $mgr->$add_attrib( \@tokenz );
+        $mgr->$add_alias ( \@tokenz );
+        $mgr->$add_depend( \@tokenz );
+        $mgr->$add_groups( \@tokenz );
+
+        return
+    };
+
+    sub
+    {
+        # scrub, default, and install the args.
+        # then pass the schedule into add_sched.
+
+        my ( $mgr, %argz ) = @_;
+
+        my $que     = $mgr->initial_queue;
+
+        my $sched   = delete $argz{ sched }
+        or log_fatal "Bogus prepare: '$mgr' lacks sched", \%argz;
+
+        # safest deafult is to run the jobs single file
+        # even if they are forked.
+
+        $argz{ maxjob  } //= 1;
+
+        $debug      = $argz{ debug   } ||= 0;
+        $verbose    = $argz{ verbose } ||= 0;
+
+        $prepare    = $verbose > 1;
+
+        for( qw( logdir rundir ) )
+        {
+            my $path    = gendir $argz{ $_ }
+            or log_fatal "Bogus prepare: unusable '$_' ($argz{$_})";
+
+            $argz{ $_ } = $path;
+        }
+
+        $argz{ nofork  }
+        ||= do
+        {
+            if( $^P && $argz{ fork_ttyz } )
+            {
+                ''
+            }
+            elsif( $^P )
+            {
+                1
+            }
+            elsif( $argz{ maxjob } < 0 )
+            {
+                1
+            }
+            else
+            {
+                ''
+            }
+        };
+
+        log_message 'Preparing:', \%argz, $sched
+        if $prepare;
+
+        # install a private copy of the arguments
+        # into the queue. this does not require a 
+        # deep copy.
+
+        local $que->{ attrib }  = \%argz;
+        local $que->{ alias  }  = {};
+
+        $DB::single = 1 if $^P && $debug;
+
+        $mgr->$add_sched( $sched );
+
+        # sanity check the results here.
+
+        for my $filz ( $que->{ files } )
+        {
+            my @errz
+            = grep
+            {
+                $filz->{ $_ }[0]
+                ? ()
+                : [ split $job_id_sep ]
+            }
+            keys %$filz;
+
+            @errz
+            or next;
+
+            log_fatal 'Missing run files:', \@errz;
+        }
+
+        log_message 'Resulting queue:', $que;
+
+        # at this point the schedule is folded into 
+        # the queue structure.
+        #
+        # pass back the manager object for daisy-chaining.
+
+        $mgr
+    }
+};
+
+########################################################################
+# duplicate and localize the consumable portons 
+# of the queue structure, then dequeue and 
+# complete all of it. if there are ever pending 
+# but un-runnable jobs then the queue is deadlocked.
+
+sub validate
+{
+    my $mgr = shift;
+
+    my $que = $mgr->active_queue;
+
+    # localize consumed portions of the queue.
+
+    local $que->{ skip }    = dclone $que->{ skip };
+    local $que->{ after }   = dclone $que->{ after };
+    local $que->{ before }  = dclone $que->{ before };
+
+    local $que->{ check }   = 1;
+
+    while( $mgr->queued )
+    {
+        my @runz    = $mgr->runnable
+        or log_fatal 'Deadlocked queue:', $que;
+
+        for( @runz )
+        {
+            $mgr->dequeue( $_ );
+            $mgr->complete( $_ );
+        }
     }
 
-    # at this point the job is usable and has the
-    # files on the filesystem database to track it.
+    # survival indicates that the dependencies are usable.
 
-    $running
+    return
 }
 
 ########################################################################
-# convert the job tag from the schedule into what gets run and run it.
-# these are general fodder for overloading.
-########################################################################
+# prepare the jobs for execution and disptach them.
+#
+# unalias is called just prior to the job being 
+# dequeued and can be overloaded to return just
+# about anything.
 
-########################################################################
-# execute the job after the process has forked.
-# overloading this is heavily tied to changes
-# in unalias.
-#
-# this may be called as a sub or method, in any
-# case the closure will be the last argument.
-#
-# returning the exit status here makes avoiding
-# phorkatosis simpler since the caller can manage
-# the exit in one place, and ensures that the exit
-# status gets written to the pidfile even if the
-# parent process dies while this is running.
-#
-# the caller gets back whatever the code
-# reference returns.
-
-sub runjob
-{
-    $_[-1]->()
-}
-
-########################################################################
-# default unalias converts the job name into a logging string and 
-# closure to execute the job. the job name should be useful in top
-# for tracking the job. 
-#
-# the closure is executed via "$_[0]->()". 
-#
-# this is where the entry for "foo = bar" gets the argument 
-# "foo" build for the "bar" call.
+my $nil     = sub{ 0 };
+my @stubz   = qw( PHONY STUB );
 
 sub unalias
 {
-    my ( $mgr, $que )   = &mgr_que;
+    my ( $mgr, $job ) = @_;
 
-    my $job = shift;
-    my $run = $que->{ alias }{ $job } // $job;
+    my $que     = $mgr->active_queue;
+    my $attrz   = $mgr->active_attrib;
 
-    # this goes into the pidfile to identify what
-    # is being run. it will be the 2nd line of the file,
-    # before the child (stringy) exit and parent (fork
-    # return) exit lines.
+    my $nspace  = $que->{ namespace };
 
-    my $idstring
+    my $verbose = $attrz->{ verbose } > 1;
+
+    if( ( my $i = index $job, $job_id_sep ) > 0 )
+    {
+        $job    = substr $job, ++$i;
+    }
+
+    my $run     = $que->{ local }{ $nspace, 'alias' }{ $job } // $job;
+
+    my $name
     = $job eq $run
     ? $job
     : "$job ($run)"
     ;
 
-    # generate the closure.
+    my $sub = '';
 
-    my $sub
-    = do
+    given( $run )
     {
-        if( $run eq 'PHONY' || $run eq 'STUB' )
-        {
-            # returning the id string is a fast way to
-            # get the pidfile entry.
+        # @stubz check has to be first.
+        # next few are in the likely order, with
+        # AUTOLOAD the last internal check and 
+        # then shellexec as default.
+        #
+        # Note: shellexec *always* logs its use to 
+        # help catch typos in method names, etc.
 
-            sub { "STUB $idstring" }
-        }
-        elsif( $run =~ /^ { .* } $/x )
+        when( @stubz )
         {
-            # literal block => eval it as sub code.
+            log_message "Stub: $job"
+            if $verbose;
 
-            eval "sub $run"
-            or log_fatal "Bogus unalias: Invalid block for $job: $run";
+            $sub    = $nil;
         }
-        elsif( ( my $i = rindex $run, '::' ) > 0 )
+
+        when( $mgr->can( $_ ) )
+        {
+            log_message "'$mgr' can: $_"
+            if $verbose;
+
+            $sub    = sub { $mgr->$run( $job ) };
+        }
+
+        when( ( my $i = rindex $_, '::' ) > 0 )
         {
             my $pkg = substr $run, 0, $i;
             my $sub = substr $run, $i+2;
 
-            eval "require $pkg";
+            eval "require $pkg"
+            or log_fatal "Bogus unalias: failed require '$pkg', $@";
 
             my $ref = $pkg->can( $sub )
-            or log_fatal "Bogus unalias: '$pkg' cannot '$sub' in $job";
+            or log_fatal "Bogus unalias: '$pkg' cannot '$sub' in $name";
 
-            sub { $ref->( $job ) };
-        }
-        elsif( my $method = $mgr->can( $run ) )
-        {
-            sub { $mgr->$method( $job ) };
-        }
-        elsif
-        (
-            $que->{ attrib }{ autoload }
-            and
-            $mgr->can( 'AUTOLOAD' )
-            and
-            $run !~ /\W/
-        )
-        {
-            # they asked for it... let the autoload
-            # demangle the run call for itself.
+            log_message "$pkg can: $job"
+            if $verbose;
 
-            sub { $mgr->$run( $job ) }
+            $sub    = sub{ $ref->( $job ) };
         }
-        else
-        {
-            # punt whatever it is to the shell.
-            # this allows the path to resolve shell commands but
-            # may require shell items with the same names as methods
-            # to have a '/' inserted in them somewheres.
 
-            sub { $mgr->shellexec( $run, $job ) };
+        when( /^ [{] .* [}] $/x )
+        {
+            # literal block => eval it as sub code.
+            # notice the .*: this may be an empty block!
+
+            log_message "Literal block"
+            if $verbose;
+
+            $sub    = eval "sub $run"
+            or log_fatal "Bogus unalias: Invalid block for $job: $run";
+        }
+
+        default
+        {
+            # no obvious way to dispatch the thing using
+            # method, sub, or block: punt to autoload or
+            # shell to handle the thing. note that autoload
+
+            if
+            (
+                $attrz->{ autoload }
+                and
+                $mgr->can( 'AUTOLOAD' )
+            )
+            {
+                # they asked for it... let the autoload
+                # demangle the run call for itself.
+
+                log_message "Autoload: $run ($job)";
+
+                $sub    = sub { $mgr->$run( $job ) };
+            } 
+            else
+            {
+                # punt whatever it is to the shell.
+                # this allows the path to resolve shell commands but
+                # will require shell items with the same names as methods
+                # to have a '/' inserted in them somewheres.
+                #
+                # worthwhile to warn people about this.
+
+                log_message "Shellexec: $run ($job)";
+
+                $sub    = sub { $mgr->shellexec( $run ) };
+            }
         }
     }
-    or log_fatal "Bogus unalias: no subroutine for $idstring";
 
-    log_message "$idstring ($sub)" if $mgr->verbose;
+    # execute takes care of localizing the 
+    # namespace and attributes before 
+    # dispatching the closure.
 
-    ( $idstring, $sub )
+    ( $name => $sub )
 }
 
 ########################################################################
-# putting this into its own method allows better reporting
-# and saves the caller from having to figure out what
-# a shell vs. subroutine return means: returning non-zero
-# to the dispatcher which will report the job as failed.
-# Since this checks both the return value of system and
-# $? it will catch whatever can be handled automatically.
+# runjob is called for everything that gets executed. 
+# if all restults are logged, with numeric returns 
+# taken as-is for exit values. note that $sub is the 
+# anon sub returned from unalias, above.
+#
+# shellexec handles the bookkeeping of system and 
+# non-zero exit status.
+
+sub runjob
+{
+    my ( $mgr, $job_id, $sub ) = @_;
+
+    $mgr->run_message( $job_id, pid => $$ );
+
+    my $que     = $mgr->active_queue;
+    my $filz    = $que->{ files }{ $job_id };
+
+    my $result
+    = eval
+    {
+        # no reason this couldn't re-open stdin if 
+        # a file were found. problem is passing in 
+        # the path -- probably better off leaving
+        # that to the running modules than finding
+        # a reliable way to manage it.
+
+        local *STDOUT = IO::File->new( '>>' . $filz->[1] )
+        if $filz->[1];
+
+        local *STDERR = IO::File->new( '>>' . $filz->[2] )
+        if $filz->[2];
+
+        $sub->()
+    };
+
+    my $err = $@;
+
+    $mgr->run_message( $job_id, result => $result // $err );
+
+    my $exit
+    = looks_like_number $result
+    ? $result
+    : $err
+    ? -1
+    : 0
+    ;
+
+    $exit
+}
 
 sub shellexec
 {
-    my ( $mgr, $que )   = &mgr_que;
+    my $mgr = shift;
 
     # if anything goes wrong put a message
     # into the logfile and pass the non-zero
@@ -696,1285 +1120,519 @@ sub shellexec
     }
 }
 
-########################################################################
-# deal with groups & sub-queues.
-########################################################################
-
-########################################################################
-# the standard group handler assigns an alias of 'group' for the
-# group names extrated from the input schedule. all this has to do
-# is update the current prefix and pass the rest of it to subsched
-# to prepare the object, then run the thing.
+# placeholder for $mgr->group( $group_name )
+# dispatched in execute.
+#
+# hand back the group name.
 
 sub group
-{
-    my ( $mgr, $que )   = &mgr_que;
+{ 
+    my ( $mgr, $group ) = @_;
 
-    my $name	= shift
-    or confess "$$: Bogus rungroup: missing group argument.";
+    my $que     = $mgr->active_queue;
+    my $nspace  = $que->{ namespace };
+    my $message = "'$group' ($nspace)";
 
-    my $sched = $que->{ group }{ $name }
-    or croak "$$: Bogus rungroup for $name: missing group entry in que";
+    log_message "Complete: $message";
 
-    log_message "Preparing subque $name:", $sched
-    if $que->{ attrib }{ verbose } > 1;
-
-    # caller gets back the result of running the schedule,
-    # which should be false.
-
-    my $attrz  = $que->{ attrib };
-
-    local $attrz->{ group  }  = $name;
-    local $attrz->{ prefix }  = $attrz->{ prefix } . '-' . $name;
-
-    $mgr->subque( sched => $sched )->validate->execute
+    $message
 }
 
 ########################################################################
-# sub-schedules are used for groups, also useful in #! code to push
-# multiple schedules through the same object. the only difference
-# is that the attributes are inherited to maintain the state.
+# dispatch the queue. 
+########################################################################
 
-sub subque
+########################################################################
+# anything in the 'before' list -- runnable or not -- 
+# is pending.
+# 
+# only job_ids with an empty value in the list
+# are runnable.
+
+sub queued
 {
-    my ( $mgr, $que )   = &mgr_que;
+    my $mgr     = shift;
+    my $que     = $mgr->active_queue;
+    my $beforz  = $que->{ before };
 
-    croak "$$: Bogus subque: no schedule argument"
-    unless @_;
+    # reduce the question to pure boolean.
 
-    my $argz
-    = do
+    !! keys %$beforz
+}
+
+sub runnable
+{
+    my $mgr     = shift;
+    my $que     = $mgr->active_queue;
+    my $beforz  = $que->{ before };
+
+    grep
     {
-        if( @_ > 1 )
-        {
-            # assume it's a list that can be safely assigned to a hash.
-
-            +{ @_ }
-        }
-        elsif( 'ARRAY' eq ( my $type = reftype $_[0] ) )
-        {
-            # assume it's a schedule in array or scalar format
-            # (e.g., a group). only thing needed here is to add
-            # the sched key for prepare.
-
-            { sched => shift }
-        }
-        elsif( 'HASH' eq $type )
-        {
-            # assume it's a hash with sched entry.
-
-            shift
-        }
-        elsif( ! $type )
-        {
-            # it's a schedle in a text string
-
-            { sched => [ split "\n", shift ] }
-        }
-    };
-
-    # modify arguments to show that this is a subque and
-    # should inerit from the que's values. this is the
-    # only place that the key should get set.
-    #
-    # localizing it avoids polluting any hashref's passed.
-
-    local $argz->{ subque } = $que;
-
-    # caller gets back a new que object with the schedule
-    # portion configured for the subque.
-
-    $mgr->prepare( %$argz )
+        ! %{ $beforz->{ $_ } } 
+    }
+    keys %$beforz
 }
 
 ########################################################################
-# que constructor
-########################################################################
+# the queue my be examined any nubmer of times
+# during the lifetime of one job. therefor the
+# jobs have to be removed from the before section
+# prior to being dispatched in order to avoid
+# multiple dispatches.
 
-# minimal constructor and new.
-# these are only useful if the que will
-# not be dispatching any methods (e.g.,
-# schedule with only shell or perl funcs).
-
-sub construct
+sub dequeue
 {
-    my $proto   = shift;
+    my ( $mgr, $job_id ) = @_;
 
-    bless {}, ref $proto || $proto;
+    my $que     = $mgr->active_queue;
+
+    delete $que->{ before }{ $job_id };
+
+    $que->{ check }
+    or $que->{ times }{ $job_id }  = Benchmark->new;
+
+    return
 }
 
-sub new
+sub complete
 {
-    my $mgr     = &construct;
+    my ( $mgr, $job_id, $exit ) = @_;
 
-    if( my $init = $mgr->can( 'init' ) )
+    $exit   ||= 0;
+
+    my $que     = $mgr->active_queue;
+    my $attrz   = $mgr->active_attrib;
+
+    my $skipz   = $que->{ skip };
+    my $beforz  = $que->{ before };
+    my $afterz  = delete $que->{ after }{ $job_id };
+
+    unless( $que->{ check } )
     {
-        $mgr->$init( @_ )
+        # skip the last words and file check 
+        # in validate mode.
+
+        my $timestr
+        = do
+        {
+            my $t0  = delete $que->{ times }{ $job_id };
+            my $t1  = Benchmark->new;
+
+            timestr timediff $t1, $t0;
+        };
+
+        $mgr->run_message( $job_id, time => $timestr );
+        $mgr->run_message( $job_id, exit => $exit );
+
+        log_message "Complete: '$job_id', $exit ($timestr)"
+        if $attrz->{ verbose } > 1 ;
+
+        # discard the files structure.
+
+        delete $que->{ files }{ $job_id };
     }
 
-    $mgr
-}
-
-sub prepare
-{
-    local $\ = "\n";
-    local $, = "\n";
-    local $/ = "\n";
-
-    # the prototype's namespace is used to dispatch
-    # any methods in the schedule.
-    #
-    # if the prototype is already blessed then recycle
-    # it as the queue manager, otherwise create a new
-    # object to manage the que.
-
-    my $proto   = shift;
-
-    my $mgr
-    = blessed $proto
-    ? $proto
-    : $proto->new
-    ;
-
-    # validate & sanitize the arguments
-    #
-    #	either need one or an even number of arguments.
-    #
-    #	won't do much good trying to create a sub-que if
-    # 	$proto isn't already a que.
-    #
-    #	writing the pidfiles out will overwrite any history
-    #	of the previous execution and make the queue un-
-    #	restartable for execution.
-    #
-    #	avoid processing a false schedule. this can happen via
-    #	things like prepare( verbose => 1 ) or prepare();
-    #
-    #	convert a string schedule to an array reference.
-    #	at this point we assume that anyone passing an object
-    #	has a proper stringify overload for it.
-
-    croak "\n$$: Missing schedule argument"
-    unless @_;
-
-    my %argz
-    = do
+    if( $exit && $attrz->{ abort } )
     {
-        if( @_ > 1 )
+        # if the job failed with abort mode then 
+        # there is nothing more to do.
+        #
+        # Note: this is not an issue for skipped
+        # jobs since exit is false (undef).
+
+        my ( $nspace, $job ) = split /$job_id_sep/o, $job_id;
+
+        log_fatal "Abort: Non-zero exit, $nspace, '$job'", $exit
+    }
+    elsif( $exit )
+    {
+        # propagate the reason to any following
+        # jobs in no-abort mode.
+
+        $skipz->{ $_ } = "Non-zero exit: $job_id, $exit"
+        for @$afterz;
+    }
+
+    # if we are still alive at this point then
+    # enable the following jobs.
+
+    if( $job_id ~~ $skipz )
+    {
+        if( my $reason = delete $skipz->{ $job_id } )
         {
-            # treat it as a list for hash assignment
+            # propagate any fatality to following 
+            # jobs in no-abort mode.
 
-            croak "\n$$: Odd number of arguments"
-            if @_ % 2;
-
-            @_
-        }
-        elsif( 'ARRAY' eq ref $_[0] )
-        {
-            # assume an arrayref is the schedule,
-
-            ( sched => shift )
-        }
-        elsif( 'HASH' eq ref $_[0] )
-        {
-            # treat it as a hash reference containing the
-            # entire schedule.
-            # queues passed in as array ref's are still hashes
-            # like ( sched => \@schedule_as_array ).
-
-            %{ $_[0] }
-        }
-        elsif( ! ref $_[0] )
-        {
-            # it's a scalar string with the schedule in it
-
-            [ split "\n", $_[0] ]
+            $skipz->{ @$afterz } = ( $reason ) x @$afterz;
         }
         else
         {
-            # unusable reference (e.g., file handle)
-
-            confess "Bogus prepare: unusable arguemnt '$_[0]'"
-        }
-    };
-
-    # at this point %argz should have the necessary
-    # data -- at least a sched value.
-
-    for( $argz{ sched } )
-    {
-        $_
-        or confess 'Missing schedule list:', \%argz;
-
-        ref $_
-        or $_   = [ split "\n" ];
-    }
-
-    my $verbose = $argz{ verbose } || '';
-
-    my $que =
-    {
-        # defined by the schedule.
-
-        queued  => {},  # jobs pending execution.
-        depend  => {},  # inter-job dependencies.
-        group   => {},  # groups by name
-        phony   => {},  # list of phony jobs
-
-        # inherited
-
-        attrib  => '',
-        alias   => '',
-
-        # bookkeeping of forked proc's.
-
-        skip    => {},  # see constants $ABORT, $CLEAN.
-
-        jobz    => {},  # $jobz{pid} = $job
-        pidz    => {},  # $que->{pidz}{$job} = $job.pid path
-        outz    => {},  # $que->{pidz}{$job} = $job.out path
-        errz    => {},  # $que->{pidz}{$job} = $job.err path
-
-        # this has not been run before.
-
-        executed => '',
-    };
-
-    $mgr->install_que( $que );
-
-    # subques inherit their parents attributes, which are
-    # overridden by explicit arguments and the que's user
-    # data area. note that these override anything passed
-    # in as arguments.
-
-    if( my $parent  = $argz{ subque } )
-    {
-        @{ $que }{ @inherit } = @{ $parent }{ @inherit }
-    }
-    else
-    {
-        @{ $que }{ @inherit } = map { +{} } @inherit
-    }
-
-    # from this point onward the construction of a que and
-    # a sub-que are the same.
-
-    # handle the dependency list, first step is to strip
-    # out comments and blank lines, we are then left with
-    # valid dependencies.
-    #
-    # one common, easily fixed, mistake is "foo:" instead of "foo :".
-    # the cleanups handle "foo :"  or "foo:" -> "foo : ".
-
-    my @linz
-    = map
-    {
-        s{ \s+ }{ }xg;
-
-        # ':' may appear in a perl function definition.
-        # need to specifically look for the surrounding
-        # whitespace.
-
-        s{^ ( \S+? ) [ \t]? : [ \t]? $}{$1 : }x;
-        s{^ ( \S+? ) [ \t]+([=%<])[ \t]+ }{$1 $2 }x;
-
-        # convert:
-        # 'foo : bar'   -> [ qw( : foo bar ) ]
-        # 'more = less' -> [ qw( = more less ) ]
-        # 'x < y = z >' -> [ '<',  'x', 'y = z' ]
-        #
-        # Note: this leaves a dangling '>' on the group
-        # definitions that has to get split off in the
-        # group handler.
-
-        [ ( split m{ \s+ ( [:=%<] ) \s+ }x, $_, 2 )[ 1, 0, 2 ] ]
-    }
-    grep
-    {
-        # strip out obvious whitespace and comment lines
-
-        s{^ \s+ }{}x;
-        s{ [#] .* $}{}x;
-
-        m{\S}
-    }
-    @{ delete $argz{ sched } };
-
-    log_message 'Preparing Schedule From:', \@linz
-    if $verbose;
-
-    # step 1: deal with information in the attribues.
-    # this overrides any aguments or defaults.
-    # if the caller sets an unknown attributes it causes
-    # a warning; avoiding an error at this point permits
-    # overriding methods to use non-standard attributes
-    # assigned via the arguments or schedule.
-    #
-    # attributes are assigned in the schedule via:
-    #
-    #   word % setting
-    #
-    # where the word is all word characters ( i.e., cannot
-    # contain either '=' or '<'.
-    #
-    # the map hands back an arrary of 2-element arrays of
-    # the attribute keys and their values.
-    #
-    # first step is to grab any attributes that were passed
-    # in as arguments. these are reserved words defined in
-    # %defaultz.
-    #
-    # then grab the attributes from the schedule.
-
-    for my $attrz ( $que->{ attrib } )
-    {
-        $attrz->{ $_->[1] } = $_->[2]
-        for grep { '%' eq $_->[0] } @linz;
-
-        $attrz->{ $_ }  //= delete $argz{ $_ } // $defaultz{ $_ }
-        for keys %defaultz;
-
-        for( qw( rundir logdir ) )
-        {
-            my $dir = $attrz->{ $_ }
-            or croak "$$: Bogus que args: missing $_";
-
-            log_message "Checking: $dir ($_)" if $verbose;
-
-            -e $dir or mkdir $dir
-            or log_fatal "Failed mkdir: $!";
-
-            -w $dir or log_fatal "Un-writable:   $dir";
-            -r _    or log_fatal "Un-readable:   $dir";
-            -x _    or log_fatal "Un-executable: $dir";
-        }
-
-        $attrz->{ maxjob } >= 0
-        or croak "$$: Bogus que args: negative maxjob";
-
-        # debug mode doesn't fork or run the commands. it's useful
-        # for debugging dependency lists.
-        #
-        # perl debugger always runs in nofork mode since it does
-        # not handle forks gracefully.
-
-        $attrz->{ nofork   }  ||= $^P unless @::ttyz;
-        $attrz->{ verbose  }  ||= 0;
-    };
-
-    # verbose displays decision information, non-verobse only
-    # displays error messages.
-    #
-    # $argz{verbose} overrides all other levels during
-    # preparation, without an argument it's either
-    # 2 (set via $que->{nofork}) or defaults to 0 (not much
-    # output).
-    #
-    # verbose > 0 will display the input lines.
-    # verobse > 1 additionally displays each alias/dependency
-    # as it is processed.
-    #
-    # if nothing "verbose" is set in the schedule or arg's
-    # then debug mode runs in "progress" mode for verbose.
-    #
-    # note that we may be in a subque here so verbose has
-    # to be re-checked for each processing cycle.
-
-    $verbose = $que->{ attrib }{ verbose } > 1;
-
-    log_message 'Attributes:', $que->{ attrib }
-    if $verbose;
-
-    @linz   = grep { '%' ne $_->[0] } @linz;
-
-    # next: deal with information in the aliases.
-    # note that aliases w/in groups are dealt with
-    # when the group is dispatched (in subque).
-    #
-    # [ '=', 'name', 'alias' ]
-
-    for my $aliasz ( $que->{ alias } )
-    {
-        %{ $aliasz }
-        = map
-        {
-            '=' eq $_->[0]
-            ? @$_[1,2]
-            : ()
-        }
-        @linz;
-    };
-
-    log_message 'Aliases:', $que->{ alias }
-    if $verbose;
-
-    @linz   = grep { '=' ne $_->[0] } @linz;
-
-    # now deal with groups.
-    #
-    # at this point these look like:
-    #
-    #	[ '<', groupname,  'syntax >' ]
-    #
-    # with whitespace around the <>. trick is that
-    # the schedule can contain any valid schedule
-    # since the extracted information is passed to
-    # prepare wholesale.
-
-    for my $groupz ( $que->{ group } )
-    {
-        my $aliasz  = $que->{ alias };
-
-        my @pass1
-        = map
-        {
-            '<' eq $_->[0]
-            ? do
-            {
-                my ( undef, $name, $syntax )   = @$_;
-
-                ( my $i   = rindex $syntax, '>' ) > 0
-                or confess "Bogus group $name: '$syntax' lacks '>'";
-
-                [ $name => substr $syntax, 0, --$i ]
-            }
-            : ()
-        }
-        @linz;
-
-        my @namz
-        = do
-        {
-            my $a   = '';
-
-            map
-            {
-                $a ne $_ ? $a = $_ : ()
-            }
-            sort map
-            {
-                $_->[0]
-            }
-            @pass1
-        };
-
-        # re-group the syntax by name.
-        # saves having to re-grep the stuff by
-        # group during execution.
-
-        for my $name ( @namz )
-        {
-            log_message "Adding group: $name"
-            if $verbose;
-
-            $groupz->{ $name } =
-            [
-                "name % $name",
-                map
-                {
-                    $name eq $_->[0]
-                    ? $_->[1]
-                    : ()
-                }
-                @pass1
-            ];
-
-            # insert the group alias if the user didn't.
-            # Note: there might already be an alias if
-            # the schedule uses another method to handle
-            # this group.
-
-            $aliasz->{ $name } ||= 'group';
-        }
-    };
-
-    # at this point all of the items for any one group
-    # have been collected in the lookaside list $que->{group}.
-
-    log_message 'Groups defined:', $que->{ group }
-    if $verbose;
-
-    @linz   = grep { '<' ne $_->[0] } @linz;
-
-    # items without [%=<] are the sequence
-    # information, ':' (anything else is cruft).
-
-    log_message "Starting rule processing"
-    if $verbose;
-
-    # syntatic sugar, minor speedup.
-
-    my $depend	= $que->{ depend    };
-    my $queued	= $que->{ queued    };
-    my $phony	= $que->{ phony     };
-
-    for( grep { ':' eq $_->[0] } @linz )
-    {
-        log_message 'Processing rule:', $_
-        if $verbose;
-
-        # break up the line into two pieces on the first ' : '
-        # then split the remainin pieces on whitespace. the
-        # first non array ($a) are the dependent jobs, the
-        # second are what they are dependnt on.
-
-        my( $a, $b ) = map { [ split ] } @{ $_ }[1,2];
-
-        # step 1: validate the job status. this includes
-        # checking if any are already running or if we
-        # are in restart mode and the jobs don't need to
-        # be re-run.
-        #
-        # overloading to validate external influences (e.g.,
-        # existing system resources or data files) should
-        # be done here.
-        #
-        # catch: it's a pain to add all of the dependencies
-        # for a job as separate jobs (e.g., a: b c d requiring
-        # separate stub entries b:, c: and d:).
-        #
-        # catch: some jobs don't depened on anything but still need
-        # to be in the queue.
-        #
-        # fix for both: assign an emtpy hash to everything initially.
-        # this keeps the grep { ! keys ... } happy and means that
-        # runnable will find all of them.
-        #
-        # Note: after this loop is done running precheck we should
-        # have an empty file for each job. tracking the empty files
-        # is a good way to know what's left in the queue if we
-        # aren't running in verbose mode.
-
-        for my $job ( @$a, @$b )
-        {
-            # skip files we've already checked.
-
-            next if exists $queued->{ $job };
-
-            croak "$$: Unrunnable: $job"
-            if $mgr->precheck( $job );
-
-            $queued->{ $job } = {};
-        }
-
-        # at this point every job in the rule has been
-        # put where we can find it again. now to deal
-        # with the targets.
-        #
-        # sanity check: does the job deadlock on itself?
-        #
-        # insert this job into the queue with a list of what
-        # it depends on.
-        #
-        # the keys of %$queued are those jobs
-        # still queued [hey!]. They are runnable when all of
-        # the dependencies have been complated, i.e., the
-        # hash %{ $queued->{job} } is empty.
-        #
-        # $depend->{$job} references an array of the other jobs
-        # that will depend on $job completing. This is used to
-        # quickly remove entries from $queued->{$anotherjob}
-        # when $job completes.
-        #
-        # for all pratical purposes, keys %$queued is the
-        # "queue" here.
-
-        for my $job ( @$a )
-        {
-            croak "$$: Deadlock dependency: $job depends on itself"
-            if grep { $job eq $_ } @$b;
-
-            @{ $queued->{ $job } }{ @$b } = ();
-
-            # this may leave duplicates on the depends stack
-            # for this job, but that won't affect the outcome.
-
-            push @{ $depend->{$_} }, $job for @$b;
+            # false skip entry: successful job 
+            # skipped on restart => pretend it
+            # completed successfully.
         }
     }
 
-    if( $verbose )
-    {
-        log_message 'Jobs:',         sort keys %$queued;
-        log_message 'Waiting for:',  sort keys %$depend;
-    }
+    # regardless of skip chain, enable
+    # the following jobs.
 
-    # anything left in @linz at this point is unusable cruft
-    # and needs to be logged.
+    delete $beforz->{ $_ }{ $job_id }
+    for @$afterz;
+    
+    # at this point the before list of any
+    # jobs following this one have been updated
+    # and any skip reasons have been propagated
+    # to the next level.
 
-    if( @linz = grep { ':' ne $_->[0] } @linz )
-    {
-        log_warning 'Ignoring cruft in schedule:', \@linz;
-    }
-
-    # quick sanity checks: is everything listed as a dependency
-    # also a job and is there at least one job that has no
-    # dependencies (i.e., can be run to begin with)?
-
-    # $queued->{$job} exists if $job gets run.
-    # $depend->{$job} exists if something depends on $job.
-    #
-    # at this point $queued{$job} should be defined for
-    # keys %$depend or there is a dependency which never
-    # will get run.
-
-    if( my @unrun = grep { ! exists $queued->{$_} } sort keys %$depend )
-    {
-        croak join ' ', "\nSome dependencies do not get run:", @unrun;
-    }
-
-    # if there are no jobs ready for the first iteration then
-    # we won't get very far...
-
-    if( my @initial =  $mgr->ready )
-    {
-        log_message 'Initial Job(s):', \@initial
-        if $verbose;
-    }
-    else
-    {
-        log_fatal 'Deadlocked schedule: No jobs are initially runnable.';
-    }
-
-    log_message 'Resulting queue:', $que
-    if $verbose;
-
-    # if we are still alive at this point the queue looks
-    # sane enough to try.
-
-    $mgr
+    return
 }
 
 ########################################################################
-# process the que.
-########################################################################
+# runfile output: append a message or write-and-close the file.
 
-# copy the que and run it once through to determine if there
-# are any deadlock or unalis issues. the copy is necessary to
-# avoid the debug operation "consuming" all of the queued
-# entires.
-#
-# note that this may have subtle effects in cases where unalias
-# has side-effects as it runs (e.g., updating global variables).
-#
-# if the copied object successfully empties itself then the
-# original que object is returned. this allows for:
-#
-#   eval { S::D->prepare(%argz)->debug->execute };
-#
-# or
-#
-#   eval { $mgr->subque(%argz)->debug->execute };
-#
-# to debug and run the que in one pass since the debug will
-# abort execution by returning undef if it fails.
-#
-# Note: the deep copy is necessary to avoid dequeue
-# and complete from consuming the queued and depend
-# hashes w/in the que object.
-#
-# Side effect of this will be creating pidfiles for
-# all jobs showing a "debugging" line and non-zero
-# exit. This allows debug in and restart mode without
-# having to clean up the pidfiles by hand.
-
-sub validate
+sub run_message
 {
-    my ( $mgr, $que )   = &mgr_que;
+    # ignore the type for file storage, use it 
+    # it is mainly useful for tied databases to
+    # keep track of $run->{ $jobid, $type }.
 
-    eval
-    {
-        # boolean operator on the que object makes immediate
-        # test of $tmp useless.
-        #
-        # separate variables are for debugging.
+    my ( $mgr, $job_id, $type, $data ) = @_;
 
-        local $que->{ attrib }{ maxjob  }   = 1;
-        local $que->{ attrib }{ validate}   = 1;
-        local $que->{ attrib }{ nofork  }   = 0;
+    my ( $nspace, $job ) = split $job_id_sep, $job_id;
 
-        $mgr->execute;
+    my $que     = $mgr->active_queue;
 
-        log_message 'Validation completed'
-        if $mgr->verbose;
-    };
+    my $path    = $que->{ files }{ $job_id }[0]
+    or log_fatal "Bogus run_message: '$job' ($nspace) lacks runfile"; 
 
-    log_error "Validate Failed: $@" if $@;
+    my $fh  = IO::File->new( '>>' .  $path )
+    or log_fatal "Bogus run_message: open '$path' for '$job'($nspace), $!";
 
-    # caller gets back original object for daisy-chaining or
-    # undef (which will abort further execution if it is
-    # daisychained).
+    chomp $data;
 
-    $@ ? undef : $mgr;
+    $fh->printflush( $data, "\n" );
+
+    return
 }
 
+sub install_fork_tty
+{
+    my ( $mgr, $attrz ) = @_;
+
+    my $ttyz    = $attrz->{ fork_ttys };
+
+    $DB::fork_TTY   = shift @$ttyz
+    or do
+    {
+        log_fatal 'No tty available';
+
+        exit -1;
+    };
+
+    -e $DB::fork_TTY
+    or do
+    {
+        log_fatal "Non-existant: '$DB::fork_TTY'";
+
+        exit -1;
+    };
+
+    # at this point the tty should be usable.
+}
+
+########################################################################
 # do the deed.
+# this is where the before/after lists are consumed, unalias is 
+# called, and the results written out.
+#
+# HUP: stop dispatching new jobs and wait for
+# the current ones to exit.
+# TERM: blast anything running, reap them,
+# and record the results.
+# QUIT/INT: blast the forks and exit immediately.
 
 sub execute
 {
-    local $\ = "\n";
-    local $, = "";
-    local $/ = "\n";
-    local $| = 1;
+    my $mgr     = shift;
+    my $que     = $mgr->active_queue;
 
-    my ( $mgr, $que )   = &mgr_que;
+    $que->{ executed }
+    and log_fatal "Bogus execute: already executed ($mgr)";
 
-    # after execute has been called once the que cannot be
-    # re-run since the queued array has been consumed.
+    log_fatal "Bogus execute: running queue", $que->{ forkz }
+    if $que->{ forkz };
 
-    croak "$$: Bogus execute: Nothing to run" unless $que;
+    my $attrz   = $mgr->active_attrib;
 
-    my $prior   = Benchmark->new;
+    # used to track jobs with forked dispatch.
+    # $que->{ forkz }{ $pid } = $job_id;
 
-    my $attrib  = $que->{ attrib };
+    my %forkz   = ();
 
-    # set the verbosity level. rather than test
-    # for $verbose > X a zillion times this sets
-    # a few, hopefully more descriptive, var's.
-    #
-    # if nothing is set then skips due to abort,
-    # non-zero exits, forkaphobia, exec fails
-    # and croaks are displayed.
-    #
-    # print_progress	=>	show jobs being forked, reaped,
-    #						jobs skipped on restart.
-    # print_detail 		=>	show unalias results, exit status,
-    #						runnable jobs, job slot limitations.
-    #
-    # debug mode always runs w/ verbose == 2 (i.e., sets
-    # $print_detail).
+    local $que->{ forkz } = \%forkz;
 
-    my $print_progress  = $attrib->{ verbose } > 0;
-    my $print_detail	= $attrib->{ verbose } > 1;
+    my $skipz   = $que->{ skip };
+    my $filz    = $que->{ files };
 
-    # this intentionally goes to STDERR so that the
-    # logs have a start/completion message in them
-    # at least.
+    my $verbose = $attrz->{ verbose };
+    my $debug   = $attrz->{ debug   };
 
-    if( $attrib->{ validate } )
+    my $progress    = $verbose > 1;
+
+    my $abort   = '';
+
+    local $SIG{ HUP }
+    = sub
     {
-        log_error "Begin Debugging";
-
-        log_message 'Debugging:', $que
-        if $print_detail;
-    }
-    else
-    {
-        print "$$: Beginning Execution";
-    }
-
-    # use for logging messages to make sure that the jobs are
-    # really run in parallel.
-
-    my $t0 = time;
-
-    # associate pids returned by wait with the jobs we forked.
-
-    my $jobz = {};
-
-    # housekeeping: set run-specific variables to
-    # reasonable values.
-
-    $que->{ failure } = '';
-
-    # may have been tickled externally, localizing the value
-    # here avoids screwing up the caller's settings.
-
-    local $SIG{ HUP  }  = 'IGNORE';
-    local $SIG{ CHLD }  = 'DEFAULT';
-
-    local $SIG{ INT  }
-    = sub { $que->{ failure } = "Scheduler aborted by SIGINT" };
-
-    local $SIG{ QUIT }
-    = sub { $que->{ failure } = "Scheduler aborted by SIGQUIT" };
-
-    local $SIG{ TERM }  =
-    sub
-    {
-        # blow off anything listed as running and mark the que as
-        # aborting. the normal process of reaping child proc's will
-        # label the pidfiles with a non-zero exit.
-
-        log_error 'Killing running jobs on sigterm';
-
-        $que->{ failure }
-        = "Parent process ($$) zapped by SIGTERM";
-
-        kill TERM => keys %$jobz if %$jobz;
+        $abort  = "$$ killed with HUP";
     };
 
-    # nothing started, yet.
-
-    my $maxjob	= $attrib->{ maxjob };
-    my $slots	= $maxjob;
-
-    # things are runnable when the hash stored for them in the queue
-    # has no dependencies remaining.
-    #
-    # sorting the list makes it a bit easier to track the execution
-    # but shouldn't effect the outcome at all.
-    #
-    # notice that this forks all the jobs it can before testing
-    # for another exit.
-    #
-    # note that since the execution of jobs is async. there may be
-    # times when we have a queue with no runnable jobs. in this
-    # case runnable returns nothing and we fall through to the
-    # wait.
-    #
-    # the || %$jobz test handles the last few jobs, where the
-    # queue is empty but we need to cycle through the wait
-    # loop.
-
-    while( %{ $que->{ queued } } || %$jobz )
+    local $SIG{ TERM }
+    = sub
     {
-        if( my @runnable = $mgr->ready )
+        $abort  = "$$ killed with TERM";
+
+        kill TERM => keys %forkz;
+        
+        # don't exit: just reap the proc's as
+        # they exit from the sigterm.
+    };
+
+    local $SIG{ QUIT }
+    = sub
+    {
+        # blow off the forks and exit immediately.
+
+        kill QUIT => keys %forkz;
+
+        exit -1
+    };
+
+    local $SIG{ INT  }
+    = sub
+    {
+        # blow off the forks and exit immediately.
+
+        kill INT_ => keys %forkz;
+
+        exit -1
+    };
+
+    # i.e., reap them here.
+
+    local $SIG{ CHLD } = 'DEFAULT';
+
+    # loop forever until there is nothing either
+    # queued or running.
+
+    $DB::single = 1 if $^P && $debug;
+
+    for( my @pending = () ;; )
+    {
+        # runnable is moderately expensive: consume
+        # the queue before replentishing it.
+
+        @pending   or @pending = $mgr->runnable;
+
+        # done if nothing is running or runnable.
+
+        %forkz || @pending
+        or last;
+
+        RUNNABLE:
+        while( my $job_id = shift @pending )
         {
-            log_message 'Runnable:', \@runnable
-            if $print_detail;
+            # break up the id into components and check if 
+            # should be dispatched.
 
-            log_message "Slots / jobs: $slots / " . scalar @runnable
-            if $print_progress;
+            my ( $nspace, $job ) = split $job_id_sep, $job_id;
 
-            RUNNABLE:
-            while ( @runnable )
+            local $que->{ namespace } = $nspace;
+
+            $skipz->{ $job_id } //= 'Skip on SIGHUP'
+            if $abort;
+
+            if( $job_id ~~ $skipz )
             {
-                # if maxjob is set then throttle back the number of
-                # runnable jobs to the number of available slots.
-                # forking decrements $slots; exits increments it.
-
-                if( $maxjob && ! $slots )
-                {
-                    log_message 'No slots available: not started', \@runnable
-                    if @runnable && $print_detail;
-
-                    last RUNNABLE;
-                }
-
-                # expand the job entry from the dependency list
-                # into whatever actually gets passed to the shell.
-                #
-                # the second argument is the "firstpass" indicator,
-                # which is zero now that we aren't calling from
-                # the prepare method.
-
-                my $job = shift @runnable;
-
-                my ( $jobid, $sub ) = $mgr->unalias( $job );
-
-                $que->{ idstring }{ $job } = $jobid;
-
-                # open the pidfile first, better to croak here than
-                # leave a job running w/o a pidfile. skip this for
-                # jobs that completed when running in restart mode.
-
-                my $pidfh
-                = $que->{ skip }{ $job } != $CLEAN
-                ? IO::File->new( $que->{ pidz }{ $job } )
-                : ''
-                ;
-
-                # deal with starting up the job:
-                #	don't fork in debug/nofork mode.
-                # 	put an abort message into the pidifle in abort mode.
-                #	otherwise fork-exec the thing.
-                #
-                # debug and nofork skip forking, all of the
-                # jobs run w/in this process -- bypassing
-                # all of the bookkeeping associated with forks.
-                #
-                # debug just checks for deadlocks;
-                # nofork actually runs the jobs and is intended
-                # for debugging.
-
-                $DB::single = 1 if $mgr->debug;
-
-                if( $attrib->{ validate } )
-                {
-                    log_message "Debugging: $jobid"
-                    if $print_progress;
-
-                    log_message "Checking $que->{ idstring }{ $job }"
-                    if $attrib->{ validate };
-
-                    $mgr->dequeue( $job );
-                    $mgr->complete( $job );
-                }
-                elsif( my $reason = $que->{ skip }{ $job } )
-                {
-                    # $que->{skip}{$job} is only set if $que->{restart}
-                    # or $que->{abort} are set.
-                    #
-                    # process jobs that are runnable but marked for
-                    # skipping.  these include ones that completed
-                    # zero on the previous pass in restart mode or
-                    # depend on failed jobs in noabort mode. either way,
-                    # they don't effect the number of running jobs and
-                    # need to be purged from the queue before we decide
-                    # how many jobs can be run.
-
-                    if( $reason == $CLEAN )
-                    {
-                        # job is being skipped due to re-execution in restart
-                        # mode and the job exiting zero on the preivous pass.
-                        #
-                        # the pidfile can be ignored since the previous exit
-                        # was clean.
-
-                        log_message "Skipping $jobid on restart."
-                        if $print_progress;
-                    }
-                    elsif( $reason == $ABORT )
-                    {
-                        # this means that a job this one depends on failed.
-                        # update the pidfile with an "aborted" message and
-                        # non-zero exit status then find the jobs that depend
-                        # on this one and update their skip values to ABORT
-                        # also.
-                        #
-                        # %jobz doesn't get updated here: since nothing is forked
-                        # there isn't a pid to store anywhere.
-
-                        log_message "Skipping $jobid on aborted prerequisite."
-                        if $print_progress;
-
-                        print $pidfh 'Failed prerequisite in noabort mode\n-1';
-
-                        # first mark the jobs which depend on this one
-                        # for abort, then dequeue and complete this one.
-                        # dequeueing this job will push
-
-                        $que->{ skip }{ $_ }
-                        = $ABORT for $mgr->depend( $job );
-                    }
-                    else
-                    {
-                        die "$$: Bogus skip setting for $job: $reason";
-                    }
-
-                    # either way, we are done with this job.
-                    # any jobs left runnable here will be picked up on
-                    # the next pass.
-
-                    $mgr->dequeue( $job );
-                    $mgr->complete( $job );
-                }
-                elsif( $reason = $que->{ failure } )
-                {
-                    # jobz doesn't get updated here: since nothing is forked
-                    # there isn't a pid to store anywhere.
-                    #
-                    # we do have to update the pidfile, however, to show
-                    # that the job was aborted.
-
-                    log_message "Skipping $jobid due to: $reason";
-
-                    print $pidfh "$$\nAbort: $reason: $jobid\n-1";
-
-                    $mgr->dequeue( $job );
-                    $mgr->complete( $job );
-                }
-                elsif( $attrib->{ nofork } )
-                {
-                    # don't fork, just get the sub and eval it
-                    # w/in this process. execution gets here
-                    # in the perl debugger or if nofork is
-                    # passed in as an argument when creating
-                    # the que.
-
-                    log_message "Single-threading: $jobid"
-                    if $print_progress;
-
-                    $mgr->dequeue( $job );
-
-                    print $pidfh "$$\n$jobid ($jobid)";
-
-                    # run the job w/in this process;
-                    # aborting the entire que if this job
-                    # fails.
-
-                    my $exit = $mgr->runjob( $sub );
-
-                    log_message "Result of $jobid: " . $exit;
-
-                    print $pidfh $exit;
-
-                    {
-                        # avoid warnings about
-                        # non-numerics in addition
-
-                        my $value
-                        = looks_like_number $exit
-                        ? $exit
-                        : 0
-                        ;
-
-                        print $pidfh $value;
-                    }
-
-                    $mgr->complete( $job );
-                }
-                else
-                {
-                    # actually going to run the job.
-
-                    # first, remove the job from $que->{queued} immediately
-                    # since we may call runnable any number of times during
-                    # the job's execution.
-                    #
-                    # %jobz maps the pid of an exited job onto its key in
-                    # the queue in order to clean up the dependencies on it.
-                    #
-                    # once the job is forked the pidfile contains two lines:
-                    # process id and command being run.
-                    #
-                    # the file handle for this job gets a pid written to it
-                    # when the job is forked and an exit status appended at
-                    # the end. checking for zero exit status of existing
-                    # pidfiles in the prepare would be a nice way to allow
-                    # for automatic restarts.
-
-                    # if we got here in debug mode then
-                    # make reeeeel sure to have a valid
-                    # tty out there or exit immediately.
-
-                    if( $^P )
-                    {
-                        exit -1
-                        unless my $tty = shift @::ttyz;
-
-                        for( 'pts', 'dev' )
-                        {
-                            last if -e $tty;
-
-                            $tty = "$_/$tty";
-                        }
-
-                        -e $tty or exit -2;
-
-                        $DB::fork_TTY = $tty;
-                    }
-
-                    if( my $pid = fork )
-                    {
-                        print $pidfh "$pid\n$jobid";
-
-                        $jobz->{ $pid } = $job;
-
-                        $mgr->dequeue( $job );
-
-                        --$slots;
-
-                        log_message "Forked $pid: $job"
-                        if $print_detail;
-                    }
-                    elsif( defined $pid )
-                    {
-                        # now in the child process.
-                        #
-                        # Note: make sure to exit w/in this block to
-                        # avoid forkatosis.
-
-                        # parent will propagate SIGTERM, normal
-                        # reaping cycle will mark this with a
-                        # non-zero exit in the pidfile.
-
-                        local $SIG{ TERM } = 'DEFAULT';
-
-                        # remember to do this before closing stdout.
-
-                        log_message "Executing: $jobid"
-                        if $print_detail;
-
-                        unless( $attrib->{ ttylog } )
-                        {
-                            my $outpath = $que->{ outz }{ $job };
-                            my $errpath = $que->{ errz }{ $job };
-
-                            log_message "stdout -> $outpath\n$$ $job: stderr -> $errpath"
-                            if $print_detail;
-
-                            open STDOUT, '>', $outpath or croak "$outpath: $!";
-                            open STDERR, '>', $errpath or croak "$errpath: $!";
-                        }
-                        else
-                        {
-                            log_error "logging $jobid to stdout/stderr";
-                        }
-
-                        # do the deed, record the result and exit.
-                        #
-                        # printing the string to the file handle
-                        # allows subroutines to return more useful
-                        # completion messages -- so long as they
-                        # evaluate to zero.
-                        #
-                        # Note: child never reaches the point where $pidfh
-                        # is closed in the main loop.
-
-                        my $prior   = Benchmark->new;
-
-                        my $rv      = eval { $mgr->runjob( $sub ) } // '';
-
-                        my $after   = Benchmark->new;
-
-                        print $pidfh timestr timediff $after, $prior;
-
-                        print $pidfh $@ ? $@ : $rv;
-
-                        close $pidfh;
-
-                        my $exit
-                        = $@
-                        ? 1                         # 1 on failure
-                        : looks_like_number $rv
-                        ? $rv                       # numbers as-is
-                        : 0                         # otherwise zero
-                        ;
-
-                        warn "$$: $job: $exit" if $exit;
-
-                        # Notice the exit!
-                        # short circuting it will lead to Phorkatosis.
-
-                        exit $exit;
-                    }
-                    else
-                    {
-                        # give up if we cannot fork a job. all jobs
-                        # after this will have pidfiles with a non-zero
-                        # exit appended to them and an abort message.
-
-                        print $pidfh "-1";
-
-                        log_error "phorkafobia on $job: $!";
-
-                        $que->{ failure } = "Phorkaphobia at $job";
-                    }
-                }
-
-                # parent closes the file handle here, regardless
-                # of how the file was processed.
-                #
-                # test avoids problems if the file handle wasn't
-                # opened (e.g., if the job was skipped).
-
-                close $pidfh;
+                # don't bother to run jobs in the skip
+                # chain: complete will propagate true
+                # values to the next level; false values
+                # are jobs skipped on restart.
+
+                $mgr->run_message
+                (
+                    $job_id, 
+                    skip =>
+                    $skipz->{ $job_id } || 'Skip on restart'
+                );
+
+                my $exit = $skipz->{ $job_id } ? -1 : 0;
+
+                $mgr->dequeue( $job_id );
+                $mgr->complete( $job_id );
+
+                next RUNNABLE
             }
 
-        }
-        elsif( %$jobz eq '0' )
-        {
-            # if nothing is available for execution then we'd
-            # better have some jobs outstanding in the background
-            # or the queue is deadlocked.
+            # job seems worth running...
+            # now check the runing job limits.
+            #
+            # groups may have different maximum 
+            # jobs set, need to check the attributes
+            # for each pending job.
+            #
+            # aside: this might be more effecient
+            # with a sort + loop on the namespaces
+            # to avoid calling active_attrib for
+            # each job. in practice ths may have
+            # no affect at all on runtime; leave
+            # for later benchmarking.
 
-            log_error "Deadlocked schedule: neither runnable nor pending jobs.";
-            log_error "Remaining jobs:", $mgr->queued;
+            my $attrz
+            = local $que->{ attrib }
+            = $mgr->active_attrib;
 
-            $que->{ failure } = 'Deadlock';
-        }
+            $verbose    = $attrz->{ verbose };
+            $progress   = $verbose > 1;
 
-        log_error "Aborting queue due to $que->{ failure }."
-        if $que->{ failure };
+            # maxjob == 0 => no limit.
 
-        # block for something to exit, convert the pid back into a
-        # job key remove this job from the dependency lists of
-        # whatever remains queued.
-        #
-        # this should not be a while-loop, since that could
-        # leave runnable jobs waiting for unrelated items
-        # to start. since any one job might leave multiple
-        # jobs runnable, we have to deal with the exits
-        # one at a time. the if-block also deals more
-        # gracefully with multiple jobs pending due to
-        # job slot limits, since any one job will always
-        # leave one more job immediately runnable.
-        #
-        # note: since nothing gets run until all the dependencies
-        # have been removed this should never hit an undefined
-        # sub-hash in %queued.
-        #
-        # if there are no outstanding jobs then wait() immediately
-        # return -1 and won't block.
-
-        log_message 'Waiting...'
-        if $print_detail;
-
-        if( (my $pid = wait) > 0 )
-        {
-            my $status = $?;
-
-            log_message "Exit: $pid ($jobz->{ $pid }) = $?";
-
-            defined ( my $job = $jobz->{ $pid } )
-            or log_error "$$: unknown pid $pid";
-
-            if( open my $pidfh, '>>',  $que->{ pidz }{ $job } )
+            if( (my $max = $attrz->{ maxjob } ) > 0 )
             {
-                print $pidfh $status;
+                # note that in single-stream mode
+                # $pids will always be empty and 
+                # this will have no effect.
+
+                my $running = keys %forkz;
+
+                log_message
+                "jobs / slots = $running / $max ($nspace)"
+                if $progress;
+
+                $max > $running
+                or next RUNNABLE
             }
 
-            # deal with non-zero exits: anything that depends on
-            # this job will be skipped; depending on the "abort"
-            # attribute value the whole que will be stubbed.
+            # at this point it looks like the job 
+            # is going to get run.
+            #
+            # dequeue the job here to avoid multiple
+            # execution attempts; makes the runnable
+            # scans more effecient also.
 
-            if( $status )
+            my ( $name, $sub ) = $mgr->unalias( $job );
+
+            $mgr->dequeue( $job_id );
+
+            if( $attrz->{ nofork } )
             {
-                log_error "$job Non-zero exit: $status";
+                log_message "Nofork: $name"
+                if $verbose;
 
-                log_error 'Cascading abort skip to dependent jobs';
+                # dispatch and post-process the job
+                # in one place.
 
-                $que->{ skip }{ $job } = $ABORT;
+                my $exit  = $mgr->runjob( $job_id, $sub );
 
-                # next question: should the whole que abort?
+                $mgr->run_message( $job_id, exit => $exit );
 
-                if( $attrib->{ abort } )
+                if( $exit )
                 {
-                    log_error 'Aborting further job startup.';
+                    $skipz->{ $job_id }
+                    = "Non-zero exit: $job = '$exit' ($nspace)";
+                }
 
-                    $que->{ failure } = "Nonzero exit from $job ($pid)";
-                }
-                else
-                {
-                    log_error 'Noabort in effect, continuing que';
-                }
+                $mgr->complete( $job_id, $exit );
             }
             else
             {
-                log_message "Successful: $job ($pid)."
-                if $print_progress;
+                # job is going to be forked: sanity 
+                # check the ttys in debug mode to 
+                # avoid severe pain later on.
+                #
+                # after that the child dispatches the
+                # job reports any return message;
+                # the parent reaps the pid and does
+                # the post-processing.
+
+                $mgr->install_fork_tty( $attrz )
+                if $^P;
+
+                if( ( my $pid = fork ) > 0 )
+                {
+                    # parent: store the pid and recovery
+                    # information and keep going.
+
+                    log_message "Forked: $name ($pid)"
+                    if $verbose;
+
+                    $forkz{ $pid }  = $job_id;
+                }
+                elsif( defined $pid )
+                {
+                    # child: make sure to exit within 
+                    # this block to avoid phorkatosis!
+                    #
+                    # also need to override the parent's
+                    # signal handlers.
+
+                    $0  = "$nspace - $job";
+
+                    @SIG{ qw( TERM QUIT INT ) } = ( 'DEFAULT' ) x 3;
+
+                    exit $mgr->runjob( $job_id, $sub )
+                }
+                else
+                {
+                    log_fatal "Phorkafobia: $job_id, $!"
+                }
+            }
+        }
+
+        # at this point all runnable jobs have 
+        # been dispatched or are being throttled
+        # via maxjobs.
+        #
+        # now next availale job and complete it.
+        # this will have no affect in nofork mode.
+        #
+        # unknown pids happen when a child process
+        # forks and dies before its child. choices
+        # are to ignore it here or give up since the
+        # outcome cannot be logged.
+        #
+        # the normal cycle will reap what we fork
+        # here, so for the moment these are just
+        # logged as errors.
+
+        if( ( my $pid = wait ) > 0 )
+        {
+            my $exit    = $?;
+
+            if( my $job_id  = delete $forkz{ $pid } )
+            {
+                $mgr->complete( $job_id, $exit );
+            }
+            else
+            {
+                log_error "Reaped orphan process: $pid";
             }
 
-            $mgr->complete( $job );
-
-            delete $jobz->{ $pid };
-
-            ++$slots;
-
-            log_message 'Currently running: ' . scalar values %$jobz
-            if $print_detail;
-        }
-        else
-        {
-            log_message 'Nothing to wait for.';
         }
     }
 
-    my $after   = Benchmark->new;
-    my $time    = timestr timediff $prior, $after;
+    # at this point if nothing is runnable or running
+    # then there should be nothing queued (i.e., the
+    # schedule should have been fully consumed).
 
-    log_message
-    (
-        $attrib->{ validate }
-        ? "Validation Completed ($time)"
-        : "Execution Completed ($time)"
-    );
+    $mgr->queued
+    and log_fatal 'Deadlocked que:', $que;
 
-    # hand back non-zero on failure, false otherwise.
+    # flag the que as complete.
 
-    $que->{ failure } ? -1 : ''
+    $que->{ executed } = 1;
+
+    return
 }
 
 # keep require happy
@@ -1983,204 +1641,122 @@ sub execute
 
 __END__
 
-=head1 Name
+=head1 NAME
 
-Parallel::Depend
+Parallel::Depend : Parallel-dependent dispatch of 
+perl or shell code.
 
-=head1 Synopsis
+=head1 SYNOPSIS
 
-    package My::Class;
+    package Mine;
 
     use base qw( Parallel::Depend );
 
-    my $file1   = '/this/file';
-    my $file2   = '/that/file';
+    my $manager = Mine->getone( @whatever );
 
-    my $schedule
-    = qq
-    {
-        'verbose % 99',                 # queue control values
-
-        'xform  : download',            # dependencies look like make.
-        'load   : xform',
-
-        download < $file1 = get >       # alias the file to a command
-        download < $file2 = get >
-        download < $file1 :     >       # files run in any order
-        download < $file2 :     >
-
-        xform   < $file1 = serialize >  # alias file to another command
-        xform   < $file1 :           >  # order doesn't matter
-        xform   < $file2 = serialize >
-        xform   < $file2 :           >
-
-        load    < maxjob % 1            > # run jobs single file
-        load    < $file2 :              > # insert these in any order,
-        load    < $file1 :              > # one at a time.
-        load    < $file1 = Data::insert >
-        load    < $file2 = Data::insert >
-    };
-
-    # object can be constructed beforehand:
-
-    my $mgr = __PACKAGE__->new( @configure_object );
-
-    $mgr->prepare( $schedule );
-    $mgr->validate;
-    $mgr->execute;
-
-    # or if the first argument is not blessed, prepare
-    # will do it for you:
-
-	my $mgr = My::Class->prepare( \@schedule );
-    $mgr->validate;
-    $mgr->execute;
-
-    # frequently, you won't need a standalone object at all
-
-	My::Class
-    ->prepare( \@schedule ) # schedule can be pre-split.
-    ->validate;
-    ->execute;
-
-    # multiple items are hashed, with a 'sched'
-    # argument for the schedule.
-    #
-    # note: jobs that fork internally will have more
-    # processes running than jobs (e.g., open my $fh, '| ...').
-    #
-    # autoload controls whether job names that cannot be
-    # resolved to perl methods, functions, or code blocks
-    # are dispatched as $mgr->$job or sent to the shell
-    # via system( $job ).
-
-	my $mgr = Scheduler->prepare
+    my @argz = 
     (
-        sched   => $sched,
-        verbose => 1,       # 1 or 2
-        maxjob  => 4,       # number of parallel jobs
+        # assign values to attributes
 
-        logdir  => $path,   # *.err, *out, default ./var/log
-        rundir  => $path,   # *.pid, default ./var/run
+        verbose => 1,       # parsing, execution progress
+        debug   => 0,       # DB::single set before first parse, dispatch
 
-        force   => $bool,   # rerun all jobs regardless of status
-        restart => $bool,   # rerun unstarted or failed jobs only
-        noabort => $bool,   # run like "make -k"
+        nofork      => '',  # single-stream
+        maxjobs     => 8,   # 0 == unlimited
+        fork_ttys   => '',  # used for $DB::fork_TTY   
 
-        nofork  => $bool,   # don't fork, mainly for debugging.
+        restart     => '',  # restart in-process queue
+        force       => '',  # ignore/overwrite previous execution
 
-        autoload => $bool,  # check for $mgr->AUTOLOAD
+        autoload    => '',  # true allows dispatch of unknown methods
+
+        logdir      => "$Bin/../var/log",   # stderr, stdout files
+        rundir      => "$Bin/../var/run",   # job status files
+
+        sched   => <<'END'
+
+        this : that     # this runs after that
+        that : other    # that runs after other
+
+        # multiple dependencies per line or 1 : 1.
+
+        foo bar : bletch blort
+        foo : bim
+        foo : bam
+        bim bam : this that
+
+        # redundent but harmless if included.
+        # foo bar : blort bletch 
+
+        # without aliases jobs are dispatched as manager
+        # object methods, perl function calls, code
+        # blocks, AUTOEXEC, or shell depending on where
+        # the job can be found.
+        # aliases are expanded in the same fashion but
+        # are passed the job name as an argument.
+
+        foo = frobnicate                # $manager->frobnicate( 'foo' )
+
+        bar = Some:Package::function    # $coderef->( 'bar' )
+
+        bim = { your code here }        # $anon_sub->( 'bim' )
+
+        bam = /path/to/shell            # shellexec '/path/to/shell', 'bam'
+        
+        this    = ./blah -a -b  # shellexec './blah -a -b', 'this'
+
+        # example of reusing an alias: zip a
+        # maxjobs files in parallel.
+
+        /tmp/bakcup/bigdump.aa  = squish
+        /tmp/bakcup/bigdump.ab  = squish
+        /tmp/bakcup/bigdump.ac  = squish
+        /tmp/bakcup/bigdump.ad  = squish
+        /tmp/bakcup/bigdump.ae  = squish
+        /tmp/bakcup/bigdump.af  = squish
+
+        /tmp/bakcup/bigdump.aa : 
+        /tmp/bakcup/bigdump.ab : 
+        /tmp/bakcup/bigdump.ac : 
+        /tmp/bakcup/bigdump.ad : 
+        /tmp/bakcup/bigdump.ae : 
+        /tmp/bakcup/bigdump.af : 
+
+        # attributes can be set this way, 
+        # mainly useful within groups.
+
+        maxjob % 4  # run 4-way parallel
+
+        # groups are sub-schedules that have their
+        # own namespace for jobs, are skpped entirely 
+        # on restart if the group completes successfully,
+        # and can set their own attributes.
+
+        pass2 < maxjob % 4          >   # throttle heavy-duty jobs.
+        pass2 < fee fie foe fum :   >   # all these can run in 
+        pass2 < this that other :   >   # parallel, no harm splitting them up
+        pass2 < this  = squish      >   # locally defined aliases: these are
+        pass2 < that  = squash      >   # *not* the same as the jobs above.
+        pass2 < other = frobnicate  >
+ 
+        # as you might have guessed by now, text after
+        # an un-escaped hash sign is treated as a comment.
+END
     );
 
-    # a class derived from this one can be used
-    # to dispatch methods if $mgr->can( 'jobname' ).
-    #
-    # the manager object is not modified within
-    # Parallel::Depend and can be any reftype
-    # useful to the derived class.
-    #
-    # if prepare is passed an unblessed first
-    # argument then it will call $proto->new()
-    # (i.e., new without args) and return the
-    # result after preparing the schedule .
-
-    package My::Class;
-    use base qw( Parallel::Depend );
-
-    sub new
-    {
-        my $proto   = shift;
-
-        bless \( my $a = '' ), ref $proto || $proto
-    }
-
-    my $schedule
-    = q
-    {
-        foo : bar bletch    # foo runs after bar and blech
-        bim bam : foo       # bim and bam follow foo
-        blort   : bim       # blort runs after bim
-
-        foo = Some::Package::function
-        bar = method_name_without_package
-        bim = /path/to/executable -with -arguments
-        bam = { perl code block encases in braces }
-
-        # blort has no alias and will be either sent
-        # to the shell if 'autoload' is false or
-        # $mgr->blort if 'autoload' is true and
-        # $mgr->can( 'AUTOLOAD' ).
-
-        # bletch is a group of jobs that run togehter
-        # and have a private alias space, can set
-        # queue attributes. on restart if bletch
-        # completed then its contents won't even be
-        # checked.
-
-        bletch < this : that  >
-        bletch < some : other >
-        bletch < maxjob % 2   >
-    };
-
-    # generate the object and prepare to
-    # run the schedule:
-
-    my $mgr = My::Class->prepare
-    (
-        verbose => 1,
-        sched   => $schedule,
-    );
-
-    # returns are shell-style: false == success.
-
-    my $failure
+    my $outcome
     = eval
     {
-        $class
-        ->prepare( \@schedule )
-        ->validate
-        ->execute
+        $manager->prepare ( @argz );    # parase, validate the queue.
+        $manager->validate;             # check for deadlocks
+        $manager->execute;              # do the deed
+        1
     }
-    or $@;
+    or die $@;
 
-    # "restart" and "force" are used to re-run a
-    # schedule after an abort. they both default
-    # to false and are mutually exclusive.
-    #
-    # setting "restart" to true will check the
-    # $rundir/*.pid files' before running each
-    # job. if the file is empty (job not started)
-    # has less than three lines (job not finished)
-    # or a non-zero exit (last line) then the job
-    # is re-run; otherwise it is stubbed in the
-    # shedule.
-    #
-    # setting "force" to true will re-run all
-    # jobs regardless of whether their status,
-    # warning about re-running jobs.
+    or just:
 
-    # restart after partial failure with noabort
-    # true to finish as much as possible:
-
-    my $mgr = My::Class->prepare
-    (
-        sched   => $sched,
-        restart => 1,       # defaults to false
-        noabort => 1,       # keep going on job failures
-    );
-
-    # re-run the entire schedule, regardless
-    # of what the prior status was. noabort
-    # is still useful if you want to examine
-    # the results and possibly use restart
-    # on the next pass.
-
-    my $mgr = My::Class->prepare
-    (
-        sched   => $sched,
-        force   => 1,       # defaults to false
-        noabort => 1,
-    );
+    $manager->prepare( @argz )->validate->execute;
 
 =head1 DESCRIPTION
 
@@ -3378,31 +2954,19 @@ a schedle, for example:
 will call $mgr->group( 'dims' ) first then
 $mgr->group( 'facts' ).
 
-
-Note: Dependencies between jobs in separate groups is
-not yet supported since the group execution begins with
-a fork that leaves the sub-que with a private copy of
-the inter-job dependency tables. Once the group is
-started if all of its jobs are not runnable then it
-will deadlock. This is currently checked in the group
-method by calling debug first:
-
-    $mgr->subque(...)->debug->execute;
-
-which will croak on a deadlock and return non-zero to
-the main que.
-
-
-=head1 Known Bugs
+=head1 Known Bugs/Features
 
 The block-eval of code can yield all sorts of oddities
 if the block has side effects (e.g., exit()). The one-
 line format also imposes some strict limits on blocks
-for now.  In any case, caveat scriptor...
+for now unless the schedule is passed in as an arrayref.
 
-test.pl has a lot of catching up to do on the code. For
-now it is best used to check for bugs in the handling of
-basic schedule syntax than all of the unalias optins.
+Dependencies between jobs in separate groups is
+not yet supported due to validation issues. The
+call to prepare will mangle dependencies between
+jobs to keep the groups in order but you cannot
+have a job in one group depened explicitly in any
+job in another group -- this includes nested groups.
 
 =head1 Author
 
@@ -3411,10 +2975,10 @@ lembark@wrkhors.com
 
 =head1 Copyright
 
-(C) 2001-2002 Steven Lembark, Workhorse Computing
+(C) 2001-2009 Steven Lembark, Workhorse Computing
 
 This code is released under the same terms as Perl istelf. Please
-see the Perl-5.8 distribution (or later) for a full description.
+see the Perl-5.10 distribution (or later) for a full description.
 
 In any case, this code is release as-is, with no implied warranty
 of fitness for a particular purpose or warranty of merchantability.
@@ -3427,6 +2991,4 @@ perlobj(1) perlfork(1) perlreftut(1)
 
 Other scheduling modules:
 
-Schedule::Parallel(1) Schedule::Cron(1)
-
-=cut
+Parallel::Queue(1) Schedule::Cron(1)
