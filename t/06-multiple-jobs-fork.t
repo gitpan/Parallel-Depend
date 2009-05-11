@@ -6,7 +6,6 @@ use base    qw( Parallel::Depend );
 use File::Basename;
 use Test::More;
 
-use Devel::Size     qw( total_size );
 use Scalar::Util    qw( looks_like_number );
 
 use Parallel::Depend::Util qw( log_message log_error );
@@ -67,8 +66,6 @@ my $mgr = $obj->prepare
 );
 
 my $que = $mgr->active_queue;
-
-log_message 'Queue structure size: ' . total_size $que;
 
 my @pathz   = map { @$_ }       values %{ $que->{ files } };
 my @runz    = grep/[.]run$/,    @pathz;

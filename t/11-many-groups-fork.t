@@ -11,32 +11,26 @@ use Parallel::Depend::Util qw( log_message log_error );
 $ENV{ EXPENSIVE_TESTS }
 or plan skip_all => 'EXPENSIVE_TESTS envoironment variable not set';
 
-my $tmpdir  = $FindBin::Bin . '/../tmp';
+if( $^P )
+{
+    @ARGV
+    or die "Bogus $0: missing fork tty list";
+}
 
-log_error "Be forwarned: this will generate 52_728 log+run files!!!!";
+my $tmpdir  = $FindBin::Bin . '/../tmp';
 
 my @sched
 = do
 {
-    my $last    = '';
-
     map
     {
-        my $group   = $_;
-
         (
-            "$group : ",
-            map
-            {
-                (
-                    "$group < $_ :              >",
-                    "$group < $_ = frobnicate   >",
-                )
-            }
-            ( 'aa' .. 'zz' )
+            "$_ : # avoid inter-group dependencies",
+            "$_ < foo :             >",
+            "$_ < foo = frobnicate  >",
         )
     }
-    ( 'a' .. 'z' )
+    ( 'aa' .. 'zz' )
 };
 
 sub frobnicate
@@ -62,11 +56,13 @@ my $mgr = $obj->prepare
     rundir  => "$tmpdir/run",
     logdir  => "$tmpdir/log",
 
-    nofork  => 1,
     force   => 1,
     verbose => 1,
-
     debug   => 0,
+
+    nofork      => '',
+    fork_ttys   => [ @ARGV ],
+    maxjobs     => 0,
 );
 
 my $que = $mgr->active_queue;
@@ -86,13 +82,6 @@ for( @pathz )
     ? ok ! -s _,    "Zero-size: $_"
     : ok   -s _,    "Non-empty: $_"
 }
-
-# avoid leaving this much cruft on the filesystem.
-# the directories get pretty big too...
-
-unlink @pathz;
-
-rmdir "$tmpdir/$_" for qw( run log );
 
 0
 

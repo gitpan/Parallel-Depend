@@ -6,37 +6,53 @@ use base    qw( Parallel::Depend );
 use File::Basename;
 use Test::More;
 
-use Parallel::Depend::Util qw( log_message log_error );
+use Parallel::Depend::Util qw( log_message );
 
 $ENV{ EXPENSIVE_TESTS }
 or plan skip_all => 'EXPENSIVE_TESTS envoironment variable not set';
 
 my $tmpdir  = $FindBin::Bin . '/../tmp';
 
-log_error "Be forwarned: this will generate 52_728 log+run files!!!!";
-
 my @sched
 = do
 {
     my $last    = '';
+    my $i       = '0000';
 
     map
     {
         my $group   = $_;
+        my $depend  = "$group : $last";
+        $last       = $group;
 
         (
-            "$group : ",
+            $depend =>
             map
             {
+                my $subgroup   = $_;
+
                 (
-                    "$group < $_ :              >",
-                    "$group < $_ = frobnicate   >",
+                    "$group < $subgroup : >",
+                    map
+                    {
+                        my $job = ++$i;
+
+                        map
+                        {
+                        (
+                            "$group < $subgroup < $job-$_ :             > >",
+                            "$group < $subgroup < $job-$_ = frobnicate  > >", 
+                        )
+                        }
+                        ( 'a' .. 'c' )
+                    }
+                    ( '000' .. '009' )
                 )
             }
-            ( 'aa' .. 'zz' )
+            ( '00' .. '09' )
         )
     }
-    ( 'a' .. 'z' )
+    ( '0' .. '9' )
 };
 
 sub frobnicate
@@ -62,10 +78,11 @@ my $mgr = $obj->prepare
     rundir  => "$tmpdir/run",
     logdir  => "$tmpdir/log",
 
-    nofork  => 1,
+    nofork  => '',
+    maxjobs => 8,
+
     force   => 1,
     verbose => 1,
-
     debug   => 0,
 );
 
@@ -88,11 +105,8 @@ for( @pathz )
 }
 
 # avoid leaving this much cruft on the filesystem.
-# the directories get pretty big too...
 
 unlink @pathz;
-
-rmdir "$tmpdir/$_" for qw( run log );
 
 0
 

@@ -283,7 +283,7 @@ sub precheck
                     # precheck, no dispatch: looks
                     # like a running queue.
 
-                    log_fatal "Running queue: $nspace, $job ($path)";
+                    log_fatal "Pending job: $nspace, $job ($path)";
                 }
                 elsif( @linz < 4 )
                 {
@@ -303,13 +303,14 @@ sub precheck
                     chomp( my $exit = $linz[-1] );
 
                     $exit
-                    or $que->{ skip }{ $nspace, $job } = 0;
+                    or $que->{ skip }{ $nspace, $job } = '';
                 }
                 else
                 {
                     # if not restarting a queue, the
-                    # exit status is immaterial if 
-                    # the job completed: do nothing.
+                    # exit status is immaterial: so 
+                    # long as the job was completed
+                    # last time it can be re-run now.
                 }
             }
 
@@ -372,9 +373,9 @@ sub precheck
     return
 }
 
-*prepare
-= do
 {
+    # isolate private vars & subs.
+
     my $verbose = '';
     my $prepare = '';
     my $debug   = '';
@@ -756,8 +757,8 @@ sub precheck
 
         return
     };
-
-    sub
+    
+    sub prepare
     {
         # scrub, default, and install the args.
         # then pass the schedule into add_sched.
@@ -841,7 +842,8 @@ sub precheck
             log_fatal 'Missing run files:', \@errz;
         }
 
-        log_message 'Resulting queue:', $que;
+        log_message 'Resulting queue:', $que
+        if $verbose;
 
         # at this point the schedule is folded into 
         # the queue structure.
@@ -850,7 +852,46 @@ sub precheck
 
         $mgr
     }
-};
+
+    # add new schedule items to an existing schedule.
+
+    sub merge
+    {
+        $DB::single = 1;
+
+        my ( $mgr, %argz ) = @_;
+
+        # allowing empty merge simplifies life for 
+        # callers, just check that the key is there
+        # and then return if the value is false.
+
+        'sched' ~~ %argz
+        or log_fatal "Bogus prepare: '$mgr' lacks sched", \%argz;
+
+        my $sched   = delete $argz{ sched }
+        or return;
+
+        my $que     = $mgr->active_queue
+        or log_fatal 'Bogus merge: no existing que', $mgr;
+
+        my $attrz   = $que->{ attrib };
+
+        $debug      = $attrz->{ debug   };
+        $verbose    = $attrz->{ verbose };
+
+        $prepare    = $verbose > 1;
+
+        log_message 'Merging:', $sched
+        if $prepare;
+
+        $mgr->$add_sched( $sched );
+
+        log_message 'Resulting queue:', $que
+        if $verbose;
+
+        $mgr
+    }
+}
 
 ########################################################################
 # duplicate and localize the consumable portons 
@@ -886,7 +927,7 @@ sub validate
 
     # survival indicates that the dependencies are usable.
 
-    return
+    $mgr
 }
 
 ########################################################################
@@ -898,6 +939,23 @@ sub validate
 
 my $nil     = sub{ 0 };
 my @stubz   = qw( PHONY STUB );
+
+sub prefork
+{
+    # called in the parent.
+    #
+    # manager's class overrides this with
+    # any cleanups that need to be done
+    # before the fork happens.
+    #
+    # good examples are closing open database
+    # handles.
+}
+
+sub postfork
+{
+    # called in the child.
+}
 
 sub unalias
 {
@@ -1413,7 +1471,7 @@ sub execute
     {
         # blow off the forks and exit immediately.
 
-        kill INT_ => keys %forkz;
+        kill INT => keys %forkz;
 
         exit -1
     };
@@ -1433,6 +1491,9 @@ sub execute
         # the queue before replentishing it.
 
         @pending   or @pending = $mgr->runnable;
+
+        log_message 'Queued:', \@pending, \%forkz
+        if $progress;
 
         # done if nothing is running or runnable.
 
@@ -1458,6 +1519,9 @@ sub execute
                 # chain: complete will propagate true
                 # values to the next level; false values
                 # are jobs skipped on restart.
+
+                log_message "Skip: $job_id"
+                if $progress;
 
                 $mgr->run_message
                 (
@@ -1505,12 +1569,12 @@ sub execute
 
                 my $running = keys %forkz;
 
-                log_message
-                "jobs / slots = $running / $max ($nspace)"
-                if $progress;
-
                 $max > $running
-                or next RUNNABLE
+                or next RUNNABLE;
+
+                log_message
+                "running / slots = $running / $max ($nspace)"
+                if $verbose;
             }
 
             # at this point it looks like the job 
@@ -1521,6 +1585,9 @@ sub execute
             # scans more effecient also.
 
             my ( $name, $sub ) = $mgr->unalias( $job );
+
+            log_message "Unalias: $job => $name"
+            if $progress;
 
             $mgr->dequeue( $job_id );
 
@@ -1558,6 +1625,11 @@ sub execute
                 $mgr->install_fork_tty( $attrz )
                 if $^P;
 
+                # parent cleans up any dangling 
+                # structures here.
+
+                $mgr->prefork( $job );
+
                 if( ( my $pid = fork ) > 0 )
                 {
                     # parent: store the pid and recovery
@@ -1570,15 +1642,24 @@ sub execute
                 }
                 elsif( defined $pid )
                 {
+                    @SIG{ qw( TERM QUIT INT ) } = ( 'DEFAULT' ) x 3;
+
+                    # child cleans up anything it needs
+                    # to before dispatching.
+
+                    $mgr->postfork;
+
                     # child: make sure to exit within 
                     # this block to avoid phorkatosis!
                     #
                     # also need to override the parent's
                     # signal handlers.
 
-                    $0  = "$nspace - $job";
-
-                    @SIG{ qw( TERM QUIT INT ) } = ( 'DEFAULT' ) x 3;
+                    $0
+                    = $nspace
+                    ? "Parallel: $nspace - $job"
+                    : "Parallel: $job"
+                    ;
 
                     exit $mgr->runjob( $job_id, $sub )
                 }
@@ -1609,15 +1690,15 @@ sub execute
         {
             my $exit    = $?;
 
-            if( my $job_id  = delete $forkz{ $pid } )
-            {
-                $mgr->complete( $job_id, $exit );
-            }
-            else
-            {
-                log_error "Reaped orphan process: $pid";
-            }
+            my $job_id  = delete $forkz{ $pid };
 
+            log_message "Completed: $pid ($job_id)($?)"
+            if $verbose;
+
+            $job_id
+            ? $mgr->complete( $job_id, $exit )
+            : log_error "Reaped orphan process: $pid";
+            ;
         }
     }
 
@@ -1652,7 +1733,7 @@ perl or shell code.
 
     use base qw( Parallel::Depend );
 
-    my $manager = Mine->getone( @whatever );
+    my $manager = Mine->$constructor( @whatever );
 
     my @argz = 
     (
@@ -1672,6 +1753,9 @@ perl or shell code.
 
         logdir      => "$Bin/../var/log",   # stderr, stdout files
         rundir      => "$Bin/../var/run",   # job status files
+
+        # this can be newline-delimeted text or 
+        # an arrayref: sched => "..." or sched => [ ... ].
 
         sched   => <<'END'
 
@@ -1694,6 +1778,14 @@ perl or shell code.
         # the job can be found.
         # aliases are expanded in the same fashion but
         # are passed the job name as an argument.
+
+        # assuming $manager->can( 'this' )
+        # the this : that end up calling 
+        # $manager->this after a successful
+        # $manager->that.
+
+        # assuming $manager->can( 'frobnicate' ),
+        # the alias end up as:
 
         foo = frobnicate                # $manager->frobnicate( 'foo' )
 
@@ -1725,7 +1817,7 @@ perl or shell code.
         # attributes can be set this way, 
         # mainly useful within groups.
 
-        maxjob % 4  # run 4-way parallel
+        maxjob % 8  # run 8-way parallel
 
         # groups are sub-schedules that have their
         # own namespace for jobs, are skpped entirely 
@@ -1747,16 +1839,22 @@ END
     my $outcome
     = eval
     {
-        $manager->prepare ( @argz );    # parase, validate the queue.
-        $manager->validate;             # check for deadlocks
+        $manager->prepare ( @argz );    # parse, validate the queue syntax.
+        $manager->validate;             # execute stubs to check for deadlocks.
         $manager->execute;              # do the deed
         1
     }
     or die $@;
 
-    or just:
+    # which can be reduced to one line if you're
+    # into stacking methods:
 
-    $manager->prepare( @argz )->validate->execute;
+    eval
+    {
+        $manager->prepare( @argz )->validate->execute;
+        1
+    }
+    or croak ";
 
 =head1 DESCRIPTION
 
@@ -1844,7 +1942,7 @@ the zips n-way parallel:
     My::Class->prepare
     (
         sched   => $sched,
-        maxjob  => 4
+        maxjob  => 2
     )
     ->execute;
 
@@ -1869,8 +1967,6 @@ will dispatch:
 =item Shell Alias
 
     /path/to/file   = /bin/gzip -9v
-
-Will 
 
 This can call $mgr->gzip( '/path/to/file1' ),
 etc, keeping four jobs running at a time (assuming
@@ -2228,8 +2324,8 @@ The pidfile serves three purposes:
 
 =item Tracking
 
- 	Tracking the empty pidfiles gives a list of
-	the pending jobs. This is mainly useful with
+ 	Tracking the changed pidfiles gives a list of
+	the executed jobs. This is mainly useful with
 	large queues where running in verbose mode
 	would generate execesive output.
 

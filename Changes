@@ -1,4 +1,17 @@
 
+4.02 Fri May  8 10:00:44 EDT 2009
+
+- Remove Devel::Size from the main tests; add new 
+  ones that aren't part of the normal test cycle
+  for anyone who cares.
+
+- Start on a subschedule merge handler.
+
+- Add "prefork" and "postfork" calls. The former
+  is made in the parent process, the latter in the
+  child. These are mainly for cleaning up things
+  like DBI handles for a known state.
+
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 

@@ -13,30 +13,18 @@ or plan skip_all => 'EXPENSIVE_TESTS envoironment variable not set';
 
 my $tmpdir  = $FindBin::Bin . '/../tmp';
 
-log_error "Be forwarned: this will generate 52_728 log+run files!!!!";
-
 my @sched
 = do
 {
-    my $last    = '';
-
     map
     {
-        my $group   = $_;
-
         (
-            "$group : ",
-            map
-            {
-                (
-                    "$group < $_ :              >",
-                    "$group < $_ = frobnicate   >",
-                )
-            }
-            ( 'aa' .. 'zz' )
+            "$_ : # avoid inter-group dependencies",
+            "$_ < foo :             >",
+            "$_ < foo = frobnicate  >",
         )
     }
-    ( 'a' .. 'z' )
+    ( 'aa' .. 'zz' )
 };
 
 sub frobnicate
@@ -86,13 +74,6 @@ for( @pathz )
     ? ok ! -s _,    "Zero-size: $_"
     : ok   -s _,    "Non-empty: $_"
 }
-
-# avoid leaving this much cruft on the filesystem.
-# the directories get pretty big too...
-
-unlink @pathz;
-
-rmdir "$tmpdir/$_" for qw( run log );
 
 0
 

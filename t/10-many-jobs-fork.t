@@ -3,7 +3,6 @@ package Testify;
 use strict;
 use base    qw( Parallel::Depend );
 
-use Devel::Size qw( size total_size );
 use File::Basename;
 use Test::More;
 
@@ -80,8 +79,6 @@ my $mgr = $obj->prepare
 );
 
 my $que = $mgr->active_queue;
-
-log_error 'Queue structure size: ' . total_size $que;
 
 my @pathz   = map { @$_ } values %{ $que->{ files } };
 
