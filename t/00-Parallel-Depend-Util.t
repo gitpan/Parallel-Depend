@@ -14,6 +14,9 @@ plan tests  => 3;
 
 use_ok $module;
 
+# Check the public @Parallel::Depend::Util::exportz
+# for a list of exported subs. 
+
 my $exportz
 = do
 {

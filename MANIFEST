@@ -22,4 +22,6 @@ t/11-many-groups-fork.t
 t/11-many-groups-nofork.t
 t/12-multi-level-groups-fork.t
 t/12-multi-level-groups-nofork.t
+t/13-ad-hoc-group-nofork.t
+t/13-ad-hoc-group-fork.t
 META.yml

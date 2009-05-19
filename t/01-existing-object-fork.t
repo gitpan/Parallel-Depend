@@ -19,6 +19,9 @@ if( $^P )
     or die "Bogus $0: missing fork tty list";
 }
 
+# same test as the 00*t but using an object rather
+# than the package itself.
+
 my @methodz
 = qw
 (

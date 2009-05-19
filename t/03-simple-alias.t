@@ -36,6 +36,14 @@ plan tests => 8 + 4 * @pathz;
 
 my $obj     = bless \(my $a = 'foobar'), __PACKAGE__;
 
+########################################################################
+# add an alias to the schedule:
+#   foo = bletch
+#   bar = bletch
+#
+# will call $mgr->bletch ( 'foo' ) or ...( 'bar' ) instead
+# of looking for a 'foo' or 'bar' method in the object.
+
 my $mgr = $obj->prepare
 (
     sched   => <<'END',

@@ -13,6 +13,9 @@ use Test::More;
 
 use FindBin qw( $Bin );
 
+# test an existing object without forking (see also notes
+# in 01*fork.t).
+
 my @methodz
 = qw
 (

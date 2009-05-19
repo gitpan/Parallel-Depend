@@ -17,6 +17,10 @@ if( $^P )
 my $tmpdir  = $Bin . '/../tmp';
 my $base    = basename $0, '.t';
 
+# what to expect on the filesystem for a two-job
+# queue: run, out, and err files for each of the
+# jobs.
+
 my @pathz =
 (
     "$tmpdir/run/$base.foo.run",

@@ -1,19 +1,31 @@
 
-4.02 Fri May  8 10:00:44 EDT 2009
+Revision history for Perl extension Parallel::Depend
+(most recent first).
 
-- Remove Devel::Size from the main tests; add new 
-  ones that aren't part of the normal test cycle
-  for anyone who cares.
+4.03 Tue May 19 14:15:18 EDT 2009
 
-- Start on a subschedule merge handler.
+- $mgr->ad_hoc will now add jobs into a running
+  schedule. This is intended for cases where one
+  job will, say, examine the filesystem and 
+  generate jobs for each file it finds. Because
+  it is not possible [yet] to re-validated a 
+  running queue, it is up to the caller to 
+  avoid deadlocks in schedules with ad-hoc
+  components. See t/13*t for examples of 
+  generating and using the ad_hoc call.
 
 - Add "prefork" and "postfork" calls. The former
   is made in the parent process, the latter in the
   child. These are mainly for cleaning up things
-  like DBI handles for a known state.
+  like DBI handles to a known state. If the manager
+  object can( thing ) then it will be called.
 
-Revision history for Perl extension Parallel::Depend
-(most recent first).
+4.02 May 11 2009
+
+- Remove Devel::Size from the main tests; add new 
+  ones that aren't part of the normal test cycle
+  for anyone else who cares. That removes Devel::Size
+  from the dependency list.
 
 4.00 Mon Mar 23 11:01:50 EDT 2009
 
