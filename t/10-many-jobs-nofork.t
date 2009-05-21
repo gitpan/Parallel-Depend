@@ -13,7 +13,10 @@ or plan skip_all => 'EXPENSIVE_TESTS envoironment variable not set';
 
 my $tmpdir  = $FindBin::Bin . '/../tmp';
 
-log_error "Be forwarned: this will generate 52_728 log+run files!!!!";
+log_error
+"Be forwarned: this will generate 52_728 log+run files!!!!",
+"You will have to clean them up in $tmpdir if the test aborts.",
+;
 
 my @sched
 = do
@@ -62,7 +65,7 @@ my $mgr = $obj->prepare
     rundir  => "$tmpdir/run",
     logdir  => "$tmpdir/log",
 
-    nofork  => 1,
+    maxjob  => -1,
     force   => 1,
     verbose => 1,
 
@@ -90,9 +93,9 @@ for( @pathz )
 # avoid leaving this much cruft on the filesystem.
 # the directories get pretty big too...
 
-unlink @pathz;
+log_message "Cleaning up cruft...";
 
-rmdir "$tmpdir/$_" for qw( run log );
+unlink @pathz;
 
 0
 

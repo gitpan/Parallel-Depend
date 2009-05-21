@@ -1,14 +1,15 @@
-use v5.10.0;
+use v5.10;
 use ExtUtils::MakeMaker;
-
-# See lib/ExtUtils/MakeMaker.pm for details of how to influence
-# the contents of the Makefile that is written.
 
 WriteMakefile
 (
 	NAME	=> "Parallel::Depend",
 
-    VERSION	=> '4.03',
+    # Note: this will usually go up with the version
+    # of Parallel::Depend but may change due to 
+    # documentation or ::Util updates.
+
+    VERSION	=> '4.04',
 
 	ABSTRACT	=> <<'END',
 Parallel process startup with dependencies and restart.
@@ -42,6 +43,8 @@ END
         Symbol                  => 0,
 
         # these aren't core, the versions matter.
+        # MIME is requird for the nastygram
+        # handler in ::Util.
 
         MIME::Lite      => 3.0,
 	},

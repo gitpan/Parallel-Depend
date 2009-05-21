@@ -1,5 +1,7 @@
+package Tesify;
 
 use strict;
+use base qw( Parallel::Depend );
 
 use Test::More;
 use FindBin qw( $Bin );
@@ -44,10 +46,11 @@ for @methodz;
 # seems to have running jobs (force) 
 # with extra verbosity.
 
-my $mgr
-= eval
+my $mgr = bless \( $a = 'as you like it' ), __PACKAGE__;
+
+eval
 {
-    $module->prepare
+    $mgr->prepare
     (
         rundir  => "$tmpdir/run",
         logdir  => "$tmpdir/log",
@@ -67,7 +70,7 @@ my $mgr
     )
 };
 
-ok $mgr, "Schedule prepares ($@)";
+ok ! $@, "Schedule prepares ($@)";
 
 # this may be more than you want to know :-)
 #

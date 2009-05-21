@@ -99,11 +99,16 @@ my $mgr = $obj->prepare
     force   => 1,
     verbose => 2,
 
-    debug   => '',
+    debug   => $ENV{ DEBUG },
 
     sched   =>
     q
     {
+        verbose     % 1
+
+        superjob    ~ ad_hoc
+        superjob    ~ verbose 2
+
         superjob    : prior
         after       : superjob
     },

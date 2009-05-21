@@ -19,7 +19,10 @@ if( $^P )
 
 my $tmpdir  = $FindBin::Bin . '/../tmp';
 
-log_error "Be forwarned: this will generate 52_728 log+run files!!!!";
+log_error
+"Be forwarned: this will generate 52_728 log+run files!!!!",
+"You will have to clean them up in $tmpdir if the test aborts.",
+;
 
 my @sched
 = do
@@ -52,11 +55,9 @@ sub frobnicate
     my $que     = $mgr->active_queue;
     my $nspace  = $que->{ namespace };
 
-    my $message = "$job($nspace)";
+    print STDOUT "$job($nspace)";
 
-    log_message $message;
-
-    $message
+    return
 }
 
 my $obj     = bless \(my $a = 'foobar'), __PACKAGE__;
@@ -73,7 +74,6 @@ my $mgr = $obj->prepare
     debug   => 1,
 
     maxjob      => 8,
-    nofork      => '',
     fork_ttys   => [ @ARGV ],
 
 );
@@ -102,6 +102,8 @@ for( @pathz )
 }
 
 # avoid leaving this much cruft on the filesystem.
+
+log_message "Cleaning up cruft...";
 
 unlink @pathz;
 

@@ -116,13 +116,18 @@ my $mgr = $obj->prepare
 
     nofork  => 1,
     force   => 1,
-    verbose => 2,
+    verbose => 1,
 
     debug   => '',
 
     sched   =>
     q
     {
+        verbose     % 1
+
+        superjob    ~ verbose 2
+        superjob    ~ ad_hoc
+
         superjob    : prior
         after       : superjob
     },

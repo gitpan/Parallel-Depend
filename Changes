@@ -2,6 +2,37 @@
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 
+4.04 Thu May 21 15:57:40 EDT 2009
+
+- Added '~' to set job-specific attributes.
+  This avoids having to set jobs calling ad_hoc
+  in their own group in order to avoid forking
+  them. The nofork setting is requird to make 
+  the schedule changes visible to the execution
+  handler (otherwise they are installed into a 
+  forked proc's copy of the queue and discarded).
+
+  The new syntax also allows setting verbose,
+  etc, for single jobs. The default for most
+  items is true (1), separate the attribute
+  with whitespace to store another value:
+
+  peaches : cream
+
+  peaches ~ ad_hoc          # peaches is *not* forked.
+  peaches ~ verbose         # verbose % 1 for peaches.
+  cream   ~ verbose 2       # verbose %2 for cream.
+
+  peaches   = frobnicate    # ad_hoc doesn't affect alias
+
+- Begin [long overdue] POD updates.
+
+- Isolate all attribute sanity checks in
+  validate_attrs. Makes it easier to 
+  overload.
+
+- Clean up t/13*t for checking ad_hoc handling.
+
 4.03 Tue May 19 14:15:18 EDT 2009
 
 - $mgr->ad_hoc will now add jobs into a running

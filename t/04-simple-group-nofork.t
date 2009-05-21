@@ -96,7 +96,7 @@ for( @pathz )
     ;
 }
 
-ok 1 == ( $mgr->debug( 1 ) ), "Debug set to 1";
+ok 0 == ( $mgr->debug( 0 ) ), "Debug set to 0";
 
 ok ! $mgr->execute, 'Execute returns false';
 
