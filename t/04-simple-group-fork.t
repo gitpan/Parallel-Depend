@@ -119,7 +119,7 @@ for( @pathz )
     ;
 }
 
-my $que = $mgr->active_queue;
+my $que = $mgr->queue;
 
 ok ! $que->{ namespace },    '$que->{ namespace } empty';
 

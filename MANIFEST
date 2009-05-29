@@ -3,6 +3,7 @@ MANIFEST
 Makefile.PL
 README
 lib/Parallel/Depend.pm
+lib/Parallel/Depend/Queue.pm
 lib/Parallel/Depend/Util.pm
 t/00-Parallel-Depend-Util.t
 t/00-Parallel-Depend.t
@@ -24,4 +25,5 @@ t/12-multi-level-groups-fork.t
 t/12-multi-level-groups-nofork.t
 t/13-ad-hoc-group-nofork.t
 t/13-ad-hoc-group-fork.t
+Profile
 META.yml

@@ -10,12 +10,6 @@ use Scalar::Util    qw( looks_like_number );
 
 use Parallel::Depend::Util qw( log_message log_error );
 
-if( $^P )
-{
-    @ARGV
-    or die "Bogus $0: missing fork tty list";
-}
-
 my $tmpdir  = $FindBin::Bin . '/../tmp';
 
 log_error "\nPhorkatosis caused by this test is intentional";
@@ -37,7 +31,7 @@ sub frobnicate
 {
     my ( $mgr, $job ) = @_;
 
-    my $que     = $mgr->active_queue;
+    my $que     = $mgr->queue;
     my $nspace  = $que->{ namespace };
 
     my $message = "$job($nspace)";
@@ -65,7 +59,7 @@ my $mgr = $obj->prepare
     fork_ttys   => [ @ARGV ],
 );
 
-my $que = $mgr->active_queue;
+my $que = $mgr->queue;
 
 my @pathz   = map { @$_ }       values %{ $que->{ files } };
 my @runz    = grep/[.]run$/,    @pathz;

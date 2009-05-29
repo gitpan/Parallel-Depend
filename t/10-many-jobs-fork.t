@@ -4,6 +4,7 @@ use strict;
 use base    qw( Parallel::Depend );
 
 use File::Basename;
+use FindBin qw( $Bin );
 use Test::More;
 
 use Parallel::Depend::Util qw( log_message log_error );
@@ -17,7 +18,7 @@ if( $^P )
     or die "Bogus $0: missing fork tty list";
 }
 
-my $tmpdir  = $FindBin::Bin . '/../tmp';
+my $tmpdir  = $Bin . '/../tmp';
 
 log_error
 "Be forwarned: this will generate 52_728 log+run files!!!!",
@@ -52,7 +53,7 @@ sub frobnicate
 {
     my ( $mgr, $job ) = @_;
 
-    my $que     = $mgr->active_queue;
+    my $que     = $mgr->queue;
     my $nspace  = $que->{ namespace };
 
     print STDOUT "$job($nspace)";
@@ -73,12 +74,12 @@ my $mgr = $obj->prepare
     verbose => 1,
     debug   => 1,
 
-    maxjob      => 8,
+    maxjob      => 2,
     fork_ttys   => [ @ARGV ],
 
 );
 
-my $que = $mgr->active_queue;
+my $que = $mgr->queue;
 
 my @pathz   = map { @$_ } values %{ $que->{ files } };
 

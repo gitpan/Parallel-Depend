@@ -57,10 +57,16 @@ sub superjob
 {
     my $mgr = shift;
 
+    my $seq = '000';
+
     my @sched
     = map
     {
+        ++$seq;
+
         (
+            "$_ ~ seq $seq",
+            "$_ ~ verbose 0",
             "$_ = subjob",
             "$_ :",
         )
@@ -75,9 +81,11 @@ sub superjob
 sub subjob
 {
     my ( $mgr, $job ) = @_;
+    my $que = $mgr->queue;
+    my $seq = $que->{ attrib }{ seq };
 
-    print STDOUT "Subjob: $job";
-    print STDERR "Subjob: $job";
+    print STDOUT "Subjob: $job ($seq)";
+    print STDERR "Subjob: $job ($seq)";
 
     return
 }
@@ -97,15 +105,13 @@ my $mgr = $obj->prepare
 
     nofork  => 1,
     force   => 1,
-    verbose => 2,
+    verbose => 1,
 
     debug   => $ENV{ DEBUG },
 
     sched   =>
     q
     {
-        verbose     % 1
-
         superjob    ~ ad_hoc
         superjob    ~ verbose 2
 

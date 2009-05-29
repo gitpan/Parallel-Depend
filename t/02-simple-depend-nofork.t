@@ -79,7 +79,7 @@ for( @pathz )
     ok -s _, "Non-empty: $_";
 }
 
-my $que = $mgr->active_queue;
+my $que = $mgr->queue;
 
 ok ! $que->{ namespace },    '$que->{ namespace } empty';
 

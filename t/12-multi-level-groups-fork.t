@@ -44,7 +44,7 @@ my @sched
                             "$group < $subgroup < $job-$_ = frobnicate  > >", 
                         )
                         }
-                        ( 'a' .. 'c' )
+                        ( 'a' .. 'z' )
                     }
                     ( '000' .. '009' )
                 )
@@ -59,14 +59,9 @@ sub frobnicate
 {
     my ( $mgr, $job ) = @_;
 
-    my $que     = $mgr->active_queue;
-    my $nspace  = $que->{ namespace };
+    print STDOUT $job, "\n";
 
-    my $message = "$job($nspace)";
-
-    log_message $message;
-
-    $message
+    $job
 }
 
 my $obj     = bless \(my $a = 'foobar'), __PACKAGE__;
@@ -78,15 +73,17 @@ my $mgr = $obj->prepare
     rundir  => "$tmpdir/run",
     logdir  => "$tmpdir/log",
 
-    nofork  => '',
-    maxjobs => 8,
+    maxjobs => $ENV{ MAXJOB } || 8,
 
     force   => 1,
-    verbose => 1,
-    debug   => 0,
+    verbose => $ENV{ VERBOSE } || 1,
+    debug   => $ENV{ DEBUG   } || '',
+
+    fork_ttys   => '',
+    nofork      => '',
 );
 
-my $que = $mgr->active_queue;
+my $que = $mgr->queue;
 
 my @pathz   = map { @$_ } values %{ $que->{ files } };
 

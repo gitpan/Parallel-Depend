@@ -79,7 +79,7 @@ END
     force   => 1,
     verbose => 2,
 
-    debug   => 1,
+    debug   => 0,
 );
 
 ok "$mgr" eq "$obj", "Prepare with existing object";
@@ -112,7 +112,7 @@ for( @pathz )
     ;
 }
 
-my $que = $mgr->active_queue;
+my $que = $mgr->queue;
 
 ok ! $que->{ namespace },    '$que->{ namespace } empty';
 

@@ -22,15 +22,13 @@ if( $^P )
 # same test as the 00*t but using an object rather
 # than the package itself.
 
+
 my @methodz
 = qw
 (
-    initial_queue
-    active_queue
-    active_attrib
-    active_alias
     run_message
     prepare
+    ad_hoc
     precheck
     validate
     unalias
@@ -108,7 +106,7 @@ for( @pathz )
     ok -s _, "Non-empty: $_";
 }
 
-my $que = $mgr->active_queue;
+my $que = $mgr->queue;
 
 ok ! $que->{ namespace },    '$que->{ namespace } empty';
 

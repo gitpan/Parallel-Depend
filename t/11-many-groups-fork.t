@@ -11,12 +11,6 @@ use Parallel::Depend::Util qw( log_message log_error );
 $ENV{ EXPENSIVE_TESTS }
 or plan skip_all => 'EXPENSIVE_TESTS envoironment variable not set';
 
-if( $^P )
-{
-    @ARGV
-    or die "Bogus $0: missing fork tty list";
-}
-
 my $tmpdir  = $FindBin::Bin . '/../tmp';
 
 my @sched
@@ -37,7 +31,7 @@ sub frobnicate
 {
     my ( $mgr, $job ) = @_;
 
-    my $que     = $mgr->active_queue;
+    my $que     = $mgr->queue;
     my $nspace  = $que->{ namespace };
 
     my $message = "$job($nspace)";
@@ -61,11 +55,11 @@ my $mgr = $obj->prepare
     debug   => 0,
 
     nofork      => '',
-    fork_ttys   => [ @ARGV ],
-    maxjobs     => 0,
+    fork_ttys   => '',
+    maxjobs     => 4,
 );
 
-my $que = $mgr->active_queue;
+my $que = $mgr->queue;
 
 my @pathz   = map { @$_ } values %{ $que->{ files } };
 

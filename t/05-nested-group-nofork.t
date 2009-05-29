@@ -43,24 +43,19 @@ my @pathz
     run/05-nested-group-nofork.pass1.bar.run
 );
 
-sub bletch
+our $AUTOLOAD = '';
+
+AUTOLOAD
 {
     my ( $mgr, $job ) = @_;
 
-    print STDOUT "stdout from bletch ($job)($mgr)\n";
-    print STDERR "stderr from bletch ($job)($mgr)\n";
+    my $i       = rindex $AUTOLOAD, ':';
+    my $name    = substr $AUTOLOAD, ++$i;
 
-    "bletch ( $job )"
-}
+    print STDOUT "stdout from $name ($job)($mgr)\n";
+    print STDERR "stderr from $name ($job)($mgr)\n";
 
-sub blort
-{
-    my ( $mgr, $job ) = @_;
-
-    print STDOUT "stdout from blort ($job)($mgr)\n";
-    print STDERR "stderr from blort ($job)($mgr)\n";
-
-    "blort ( $job )"
+    "$name ( $job )"
 }
 
 plan tests => 9 + 4 * @pathz;
@@ -71,30 +66,40 @@ my $mgr = $obj->prepare
 (
     sched   => <<'END',
 
-foo = bletch
+hak % nada
+foo = outer
 
-pass1 < foo : bar       >
-pass1 < bar = bletch    >
+pass1 < hak   % one                 > # un-nested group
+pass1 < bar   = one                 > # un-nested group
+pass1 < bar   : foo                 > # un-nested group
 
-pass3 < foo : bar                   >
-pass3 < bar : pass2                 >
-pass3 < bar = blort                 >
-pass3 < pass2 < foo : bar       >   >
-pass3 < pass2 < foo = blort     >   > 
-pass3 < pass2 < bar = bletch    >   >
+pass3 < hak   % three               > # group with nesting
+pass3 < bar   = three               > # group with nesting
+pass3 < foo   = middle              > # group with nesting
+pass3 < pass2 : foo                 > # group with nesting
+pass3 < bar   : pass2               > # group with nesting
+
+pass3 < pass2 < hak % two       >   > # nested group
+pass3 < pass2 < bar = two       >   > # nested group
+pass3 < pass2 < foo = inner     >   > # nested group
+pass3 < pass2 < foo : bar       >   > # nested group
 
 pass3 : pass1
 
 END
 
+    autoload    => 1,
+
     rundir  => "$tmpdir/run",
     logdir  => "$tmpdir/log",
 
+    maxjob  => 0,
     nofork  => 1,
-    force   => 1,
-    verbose => 2,
 
-    debug   => 1,
+    force   => 1,
+
+    verbose => $ENV{ VERBOSE }  || 1,
+    debug   => $ENV{ DEBUG }    || '',
 );
 
 ok "$mgr" eq "$obj", "Prepare with existing object";
@@ -127,14 +132,14 @@ for( @pathz )
     ;
 }
 
-my $que = $mgr->active_queue;
+my $que = $mgr->queue;
 
-ok ! $que->{ namespace },    '$que->{ namespace } empty';
+ok ! $que->{ namespace },    '$que->{ namespace } localized';
 
-ok ! exists $que->{ forkz }, '$que->{ forkz } localized';
+ok ! exists $que->{ forkz }, '$que->{ forkz  } localized';
 
 ok ! % { $que->{ before } }, '$que->{ before } consumed';
-ok ! % { $que->{ after  } }, '$que->{ before } consumed';
+ok ! % { $que->{ after  } }, '$que->{ after  } consumed';
 
 # avoid leaving cruft on the filesystem
 

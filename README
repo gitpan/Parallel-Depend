@@ -1,3 +1,4 @@
+
 The current release of P::D requires Perl-5.10 via
 "use" syntax in the modules and tests.
 
@@ -16,3 +17,15 @@ All of the really dangerous tests will short-circut
 unless EXPENSIVE_TESTS is set in the environment --
 for example "EXPENSIVE_TESTS=1 prove --blib t/*t"
 will run everything. 
+
+All of ./Profile/*t (currently empty) are intended 
+for use with Devel::Profile. For example:
+
+    perl -d:Profile --blib Profile/phorkatosis;
+
+They are separated in order to avoid adding 
+Devel::Profile to the Manifest for the small 
+number of cases where anyone cares. Those of us 
+who do this kind of profiling will already have 
+D::P installed and won't care; everyone else can 
+ignore them.

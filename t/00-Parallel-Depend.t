@@ -14,10 +14,6 @@ my $tmpdir  = $Bin . '/../tmp';
 my @methodz
 = qw
 (
-    initial_queue
-    active_queue
-    active_attrib
-    active_alias
     run_message
     prepare
     ad_hoc
@@ -31,9 +27,16 @@ my @methodz
     dequeue
     complete
     execute
+
+    autoload
+    debug
+    fork_ttys
+    maxjobs
+    nofork
+    verbose
 );
 
-plan tests  => 9 + @methodz;
+plan tests  => 7 + @methodz;
 
 use_ok $module;
 
@@ -68,9 +71,8 @@ eval
             bar    : blort
         },
     )
-};
-
-ok ! $@, "Schedule prepares ($@)";
+}
+or BAIL_OUT "Prepare: $@";
 
 # this may be more than you want to know :-)
 #
@@ -80,9 +82,8 @@ ok ! $@, "Schedule prepares ($@)";
 # expected for a simple schedule (i.e., that the
 # que guts are not botched).
 
-my $que = $mgr->active_queue;
-
-ok $que, "Manager has a queue";
+my $que = eval { $mgr->queue }
+or BAIL_OUT "Queue not installed: $@";
 
 my $beforz  = $que->{ before };
 my $afterz  = $que->{ after  };
@@ -95,7 +96,7 @@ ok ! @{ $afterz->{ '', 'bar' } },               'nothing follows bar';
 ok "$;blort" ~~ $beforz->{ '', 'bar' },         'blort is before bar';
 ok "$;foo"   ~~ $beforz->{ '', 'blort' },       'foo is before blort';
 
-ok ! %{ $beforz->{ '', 'foo' } },               'nothing is before foo';
+ok ! $beforz->{ '', 'foo' },                    'nothing is before foo';
 
 0
 

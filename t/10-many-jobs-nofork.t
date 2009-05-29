@@ -4,6 +4,7 @@ use strict;
 use base    qw( Parallel::Depend );
 
 use File::Basename;
+use FindBin qw( $Bin );
 use Test::More;
 
 use Parallel::Depend::Util qw( log_message log_error );
@@ -11,7 +12,7 @@ use Parallel::Depend::Util qw( log_message log_error );
 $ENV{ EXPENSIVE_TESTS }
 or plan skip_all => 'EXPENSIVE_TESTS envoironment variable not set';
 
-my $tmpdir  = $FindBin::Bin . '/../tmp';
+my $tmpdir  = $Bin . '/../tmp';
 
 log_error
 "Be forwarned: this will generate 52_728 log+run files!!!!",
@@ -46,7 +47,7 @@ sub frobnicate
 {
     my ( $mgr, $job ) = @_;
 
-    my $que     = $mgr->active_queue;
+    my $que     = $mgr->queue;
     my $nspace  = $que->{ namespace };
 
     my $message = "$job($nspace)";
@@ -72,7 +73,7 @@ my $mgr = $obj->prepare
     debug   => 0,
 );
 
-my $que = $mgr->active_queue;
+my $que = $mgr->queue;
 
 my @pathz   = map { @$_ } values %{ $que->{ files } };
 

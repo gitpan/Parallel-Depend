@@ -2,6 +2,54 @@
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 
+4.05 Fri May 29 12:36:43 EDT 2009
+
+- Split out que contents lookups into separate
+  module. Doesn't add any new functionality but
+  helps keep the code cleaner and should simplify
+  overloading storage of the contents via DBM::Deep
+  or DBIx modules.
+
+- The queues "attrib" and "alias" values are
+  localized more simply using $que->alias and
+  $que->attrib.
+
+- Saner names for a few of the internal methods:
+  job_attrib became merge_attrib. 
+
+- Removed unused 'group' from the queue structure.
+
+- Test cleanups, in particular t/05* uses an autoload
+  to make the nesting aliases more obvious -- and
+  test the autoload feature.
+
+- Job-specific attributes for anything pending are
+  cached to save unnecessary calls to $que->merge_attrib
+  (profiling showed it to be one of the big hits).
+
+- Added a bit of boilerplate to the signal handlers
+  to avoid a logic race with a signal arriving 
+  before the defaults had been restored in the child
+  processes.
+
+- The runnable test became to expensive for 
+  large jobs. The simplest speedup was to 
+  replace empty hashes with false values 
+  when the hashes are first found to be empty.
+  This changed the code from grep { ! %{ $h->{$k} } }
+  to grep { ! $h->{$k} } and seemed to help.
+
+- There are also a few performance tweaks in 
+  precheck, which only checks the logdir, rundir
+  once (via gendir) and uses them as-is for the
+  individual file checks.
+
+- Documentation is [surprise] lagging. It isn't 
+  hopeless but definitions of the guts are mostly
+  useless at this point -- though the interfaces
+  work as shown. Adding proper doc's for ad_hoc
+  schedules is next, then the guts.
+
 4.04 Thu May 21 15:57:40 EDT 2009
 
 - Added '~' to set job-specific attributes.

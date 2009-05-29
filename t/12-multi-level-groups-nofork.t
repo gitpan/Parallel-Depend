@@ -59,7 +59,7 @@ sub frobnicate
 {
     my ( $mgr, $job ) = @_;
 
-    my $que     = $mgr->active_queue;
+    my $que     = $mgr->queue;
     my $nspace  = $que->{ namespace };
 
     my $message = "$job($nspace)";
@@ -85,7 +85,7 @@ my $mgr = $obj->prepare
     debug   => 0,
 );
 
-my $que = $mgr->active_queue;
+my $que = $mgr->queue;
 
 my @pathz   = map { @$_ } values %{ $que->{ files } };
 

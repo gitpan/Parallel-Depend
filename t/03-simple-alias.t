@@ -61,6 +61,8 @@ END
     nofork  => 1,
     force   => 1,
     verbose => 1,
+
+    debug   => 1,
 );
 
 ok "$mgr" eq "$obj", "Prepare with existing object";
@@ -87,7 +89,7 @@ for( @pathz )
     ok -s _, "Non-empty: $_";
 }
 
-my $que = $mgr->active_queue;
+my $que = $mgr->queue;
 
 ok ! $que->{ namespace },    '$que->{ namespace } empty';
 

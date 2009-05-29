@@ -388,20 +388,44 @@ sub localpath
 
 # validate/create a directory.
 # default mods are 02775.
+#
+# simpler but doesn't play nice with the profiler:
+#
+#    abs_path
+#    reduce
+#    {
+#        $a  = catdir $a, $b;
+#
+#        -e $a || mkdir $a, 02755
+#        or confess "Failed mkdir: $a, $!", \@_;
+#
+#        $a
+#    }
+#    splitdir catdir @_
 
 sub gendir
 {
-    abs_path
-    reduce
+    my $path    = catdir @_;
+
+    if( -e $path )
     {
-        $a  = catdir $a, $b;
-
-        -e $a || mkdir $a, 02755
-        or confess "Failed mkdir: $a, $!", \@_;
-
-        $a
+        $path
     }
-    splitdir catdir @_
+    else
+    {
+        my $dir    = '';
+
+        for( splitdir $path )
+        {
+            $dir    = catdir $dir, $_;
+
+            -e $dir || mkdir $dir, 02755
+            or confess "Failed mkdir: $dir, $!", \@_;
+        }
+
+        abs_path $dir
+    }
+
 }
 
 sub genpath
