@@ -32,7 +32,7 @@ sub bletch
     "Handled: $job"
 }
 
-plan tests => 8 + 4 * @pathz;
+plan tests => 7 + 4 * @pathz;
 
 my $obj     = bless \(my $a = 'foobar'), __PACKAGE__;
 
@@ -60,10 +60,11 @@ END
 
     nofork  => 1,
     force   => 1,
-    verbose => 1,
+    verbose => 2,
 
     debug   => 1,
-);
+)
+or BAIL_OUT 'Queue failes prepare';
 
 ok "$mgr" eq "$obj", "Prepare with existing object";
 
@@ -79,7 +80,12 @@ for( @pathz )
     ;
 }
 
-ok ! $mgr->execute, 'Execute returns false';
+eval 
+{
+    $mgr->execute;
+    1
+}
+or BAIL_OUT 'Queue failes execution';
 
 ok $$mgr eq 'foobar', "Manager object contents unmolested";
 

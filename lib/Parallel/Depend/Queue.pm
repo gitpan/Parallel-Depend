@@ -6,7 +6,7 @@ package Parallel::Depend::Queue;
 
 use v5.10;
 use strict;
-use vars qw( $job_id_sep );
+use vars qw( $job_id_sep $nspace_sep );
 
 use File::Basename;
 
@@ -18,11 +18,19 @@ use Symbol                  qw( qualify_to_ref );
 # package variables
 ########################################################################
 
-our $VERSION    = v1.0.0;
+our $VERSION    = v1.1.0;
 
 my $empty       = {};
 
-*job_id_sep     = \"$;";
+*job_id_sep     = \qq{$;};
+*nspace_sep     = \q{.};
+
+my @no_inherit_attrz
+= qw
+(
+    ad_hoc
+    alias
+);
 
 ########################################################################
 # public interface
@@ -48,8 +56,8 @@ sub construct
 
 sub init
 {
-    # return the existing que if it exists otherwise
-    # install a que if one is supplied otherwise die.
+    # populate the queue structure, load the
+    # initial arguments as attributes.
     
     my $que     = shift;
 
@@ -66,12 +74,6 @@ sub init
 
     %$que =
     (
-        # used within _attrib, _alias to separate out
-        # individual jobs. contents are managed by the
-        # $mgr object.
-
-        namespace   => '',
-
         # defined by the schedule.
         # { prior }{ $job } => jobs that run prior to $job.
         # { after }{ $job } => jobs that run after $job.
@@ -88,9 +90,8 @@ sub init
 
         # stderr, stdout, runfile paths for each job.
         #
-        # prefix is added before logdir and rundir entries
-        # with the name to avoid basename collisions for jobs
-        # aliased in mutiple groups.
+        # prefix used to generate the basenames of 
+        # all files.
 
         prefix  => $base,
 
@@ -114,31 +115,113 @@ sub init
 # $que->foo( $new_context ) when preparing or 
 # executing the schedule.
 
-for my $type ( qw( alias attrib ) )
+for
+(
+    [ alias   => []                 ],
+    [ attrib  => \@no_inherit_attrz ],
+)
 {
-    my $get = qualify_to_ref $type;
-    my $has = qualify_to_ref 'has_' . $type;
+    my ( $type, $purge ) = @$_;
+
+    my $ref = qualify_to_ref $type;
 
     my $key = '_' . $type;
 
-    *$get
+    *$ref
     = sub
     {
-        my ( $que, $contxt ) = @_;
+        my ( $que, $nspace ) = @_;
 
-        $contxt //= $que->{ namespace };
+        $nspace //= $que->{ namespace } || '';
 
-        $que->{ $key }{ $contxt }
-        ||= +{ %{ $que->{ $type } } }
+        my $a   = $que->{ $key };
+
+        $a->{ $nspace }
+        ||= do
+        {
+            my %b   = %{ $que->{ $type } };
+
+            delete @b{ @$purge };
+
+            \%b
+        }
     };
+}
 
-    *$has
-    = sub
+########################################################################
+# these keep $job_id_sep and $nspace_sep private.
+
+sub namespace
+{
+    my $que = shift;
+
+    'namespace' ~~ $que
+    or log_fatal 'Bogus namespace: queue missing namespace';
+
+    defined ( my $nspace  = $que->{ namespace } )
+    or log_fatal "Damaged queue: undefined namespace", $que;
+
+    if( $nspace && @_ )
     {
-        my ( $que, $subkey ) = @_;
+        join $nspace_sep, $que->{ namespace }, $_[0]
+    }
+    elsif( @_ )
+    {
+        $_[0]
+    }
+    else
+    {
+        $nspace
+    }
+}
 
-        $subkey ~~ $que->{ $type }
-    };
+sub job_id
+{
+    my $que = shift;
+
+    @_ 
+    ? join $job_id_sep, $que->{ namespace }, $_[0]
+    : $que->{ namespace } . $job_id_sep
+}
+
+sub job_id_split
+{
+    my ( $que, $job_id ) = @_;
+
+    $job_id //= $que->{ job_id }
+    or log_fatal 'Bogus job_id_split: missing job_id';
+
+    split /$job_id_sep/o, $job_id, 2
+}
+
+sub job_name
+{
+    my $que = shift;
+
+    my $job = shift // $que->{ job }
+    or log_fatal 'Bogus job_name: missing job';
+
+    my $i = index $job, $job_id_sep;
+
+    $i < 0
+    ? $job
+    : substr $job, ++$i
+}
+
+sub resolve_alias
+{
+    my $que     = shift;
+    my $job     = $que->job_name( @_ );
+
+    my $alias
+    = $que->{ alias }{ $job }
+    // $que->attrib->{ alias }
+    // $job
+    ;
+
+    wantarray
+    ? ( $alias => $job )
+    : $alias
 }
 
 ########################################################################
@@ -147,29 +230,21 @@ for my $type ( qw( alias attrib ) )
 
 sub merge_attrib
 {
-    my $que     = shift;
+    my $que         = shift;
 
-    my $context
-    = 2 == @_
-    ? join $job_id_sep, @_
-    : 1 == @_ 
-    ? shift
-    : log_fatal 'Bogus job_attrib: invalid argument count', \@_
-    ;
+    my ( $alias, $name ) = $que->resolve_alias( @_ );
+     
+    my $nspace      = $que->namespace;
 
-    my $global  = $que->attrib;
+    my $attrz       = $que->{ _attrib };
 
-    if( my $local = $que->{ _attrib }{ $context } )
-    {
-        +{
-            %$global,
-            %$local,
-        }
-    }
-    else
-    {
-        $global
-    }
+    my $global      = $que->attrib;
+    my $alias_attrz = $attrz->{ $nspace, $alias } || $empty;
+    my $job_attrz   = $attrz->{ $nspace, $name  } || $empty;
+
+    wantarray
+    ?  ( %$global, %$alias_attrz, %$job_attrz )
+    : +{ %$global, %$alias_attrz, %$job_attrz }
 }
 
 sub set_job_attrib
@@ -193,6 +268,23 @@ sub set_job_attrib
     }
 
     return
+}
+
+sub get_job_attrib
+{
+    my $que     = shift;
+
+    my $job     = shift 
+    or log_fatal "Bogus set_job_attrib: missing job argument";
+
+    my $nspace  = $que->{ namespace };
+
+    my $attrz   = $que->{ _attrib }{ $nspace, $job }
+    or return;
+
+    wantarray
+    ? @{ $attrz }{ @_ }
+    : $attrz->{ $_[0] }
 }
 
 # keep require happy

@@ -68,7 +68,7 @@ for @methodz;
 
 my $mgr = $obj->prepare
 (
-    sched   => 'foo:',
+    sched   => 'foo :',
 
     rundir  => "$tmpdir/run",
     logdir  => "$tmpdir/log",

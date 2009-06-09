@@ -1,9 +1,10 @@
 --- #YAML:1.0
 name:               Parallel-Depend
-version:            4.05
+version:            4.07
 abstract:           Parallel process startup with dependencies and restart.
 Manager object can dispatch perl methods or functions,
-shell, or code blocks from the schedule.
+shell, or code blocks from the schedule and use running
+jobs to generate and schedule new ones.
 
 author:
     - Steven Lembark <lembark@wrkhors.com>

@@ -13,15 +13,8 @@ use Test::More;
 
 use FindBin qw( $Bin );
 
-if( $^P )
-{
-    @ARGV
-    or die "Bogus $0: missing fork tty list";
-}
-
-# same test as the 00*t but using an object rather
-# than the package itself.
-
+# test an existing object without forking (see also notes
+# in 01*fork.t).
 
 my @methodz
 = qw
@@ -64,6 +57,10 @@ sub foo
 
 plan tests => 8 + @methodz + 4 * @pathz;
 
+# avoid stale data screwing up the tests.
+
+unlink @pathz;
+
 my $obj     = bless \(my $a = 'foobar'), __PACKAGE__;
 
 ok $obj->can( $_ ), "Object can '$_'"
@@ -71,15 +68,15 @@ for @methodz;
 
 my $mgr = $obj->prepare
 (
-    sched   => 'foo:',
+    sched   => 'foo :',
 
     rundir  => "$tmpdir/run",
     logdir  => "$tmpdir/log",
 
     force   => 1,
-    verbose => 1,
+    verbose => 2,
 
-    fork_ttys   => [ @ARGV ]
+    nofork  => '',
 );
 
 ok "$mgr" eq "$obj", "Prepare with existing object";

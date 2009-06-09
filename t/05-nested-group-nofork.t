@@ -58,12 +58,26 @@ AUTOLOAD
     "$name ( $job )"
 }
 
-plan tests => 9 + 4 * @pathz;
+unlink @pathz;
+
+plan tests => 8 + 4 * @pathz;
 
 my $obj     = bless \(my $a = 'foobar'), __PACKAGE__;
 
 my $mgr = $obj->prepare
 (
+    autoload    => 1,
+
+    force   => 1,
+    maxjob  => 0,
+    nofork  => 1,
+
+    rundir  => "$tmpdir/run",
+    logdir  => "$tmpdir/log",
+
+    verbose => $ENV{ VERBOSE }  || 1,
+    debug   => $ENV{ DEBUG }    || '',
+
     sched   => <<'END',
 
 hak % nada
@@ -87,19 +101,6 @@ pass3 < pass2 < foo : bar       >   > # nested group
 pass3 : pass1
 
 END
-
-    autoload    => 1,
-
-    rundir  => "$tmpdir/run",
-    logdir  => "$tmpdir/log",
-
-    maxjob  => 0,
-    nofork  => 1,
-
-    force   => 1,
-
-    verbose => $ENV{ VERBOSE }  || 1,
-    debug   => $ENV{ DEBUG }    || '',
 );
 
 ok "$mgr" eq "$obj", "Prepare with existing object";
@@ -118,7 +119,13 @@ for( @pathz )
 
 ok 1 == ( $mgr->debug( 1 ) ), "Debug set to 1";
 
-ok ! $mgr->execute, 'Execute returns false';
+eval
+{
+    $mgr->execute;
+
+    1
+}
+or BAIL_OUT "Failed execution: $@";
 
 ok $$mgr eq 'foobar', "Manager object contents unmolested";
 
@@ -143,7 +150,7 @@ ok ! % { $que->{ after  } }, '$que->{ after  } consumed';
 
 # avoid leaving cruft on the filesystem
 
-unlink @pathz;
+#unlink @pathz;
 
 0
 

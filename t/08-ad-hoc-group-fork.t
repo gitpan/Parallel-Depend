@@ -4,6 +4,7 @@ use strict;
 use base    qw( Parallel::Depend );
 
 use File::Basename;
+use IO::File;
 use Test::More;
 
 use FindBin qw( $Bin );
@@ -11,13 +12,17 @@ use FindBin qw( $Bin );
 my $tmpdir  = $Bin . '/../tmp';
 my $base    = basename $0, '.t';
 
+my $path    = "$tmpdir/13-results.out";
+
+my $results = IO::File->new( "> $path" )
+or BAIL_OUT "> $path: $!";
+
 my @subz    
 = do
 {
     my $a   = 'z';
 
-    map { ++$a } ( 1 .. 2 );
-
+    map { ++$a } ( 1 .. 10 );
 };
 
 my @pathz
@@ -36,7 +41,10 @@ sub prior
     # none of the paths should exist at this point: 
     # they have not been added to the scheule yet.
 
-    ok ! -e, "Missing: $_"
+    local $\    = "\n";
+    local $,    = "\t";
+
+    $results->printflush( "Non-existant: $_", ! -e )
     for @pathz;
 
     return
@@ -47,26 +55,27 @@ sub after
     # at this point everything handled via precheck
     # should exist.
 
-    ok -s, "Non-empty: $_"
+    local $\    = "\n";
+    local $,    = "\t";
+
+    $results->printflush( "Non-empty: $_", -s )
     for @pathz;
 
     return
 }
 
+# generate a schedule with all of the jobs 
+# running in parallel. each of them calls
+# subjob with the job name.
+
 sub superjob
 {
     my $mgr = shift;
 
-    my $seq = '000';
-
     my @sched
     = map
     {
-        ++$seq;
-
         (
-            "$_ ~ seq $seq",
-            "$_ ~ verbose 0",
             "$_ = subjob",
             "$_ :",
         )
@@ -81,11 +90,12 @@ sub superjob
 sub subjob
 {
     my ( $mgr, $job ) = @_;
-    my $que = $mgr->queue;
-    my $seq = $que->{ attrib }{ seq };
 
-    print STDOUT "Subjob: $job ($seq)";
-    print STDERR "Subjob: $job ($seq)";
+    # fill the logs with something to 
+    # check in after via -s.
+
+    print STDOUT "Subjob: $job";
+    print STDERR "Subjob: $job";
 
     return
 }
@@ -103,17 +113,19 @@ my $mgr = $obj->prepare
     rundir  => "$tmpdir/run",
     logdir  => "$tmpdir/log",
 
-    nofork  => 1,
+    nofork  => 0,
     force   => 1,
     verbose => 1,
 
-    debug   => $ENV{ DEBUG },
+    debug   => '',
 
     sched   =>
     q
     {
-        superjob    ~ ad_hoc
+        verbose     % 1
+
         superjob    ~ verbose 2
+        superjob    ~ ad_hoc
 
         superjob    : prior
         after       : superjob
@@ -121,6 +133,22 @@ my $mgr = $obj->prepare
 );
 
 $mgr->execute;
+
+my @resultz
+= do
+{
+    open $results, '<', $path
+    or BAIL_OUT "< $path: $!";
+
+    map { [ split /\t/ ] } <$results>
+};
+
+for( @resultz )
+{
+    my ( $message, $sanity ) = @$_;
+
+    ok $sanity, $message;
+}
 
 # avoid leaving cruft on the filesystem
 

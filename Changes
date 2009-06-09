@@ -2,6 +2,116 @@
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 
+4.07 Mon Jun  8 19:43:45 EDT 2009
+
+- Fix typo "INT_" in signal name.
+
+- Two things simplify generation of template
+  schedules: default alias and 'ad_hoc' attribute
+  for the alias.
+
+- Add single-level attribute for groups to use the 
+  group name as an alias for all jobs in the group.
+
+  This is for staged operations where a set of 
+  modules handle, say, the processing of a group
+  of files in one dataset. They all have the same
+  methods for each stage:
+
+    serialize   < Nodes     = pass1 >
+    serialize   < Names     = pass1 >
+    serialize   < Division  = pass1 >
+    serialize   < Delnodes  = pass1 >
+    serialize   < Merged    = pass1 >
+    serialize   < Nodes     :       >
+    serialize   < Names     :       >
+    serialize   < Division  :       >
+    serialize   < Delnodes  :       >
+    serialize   < Merged    :       >
+
+  becomes just:
+
+    serialize   < alias     % pass1 >
+    serialize   < Nodes     :       >
+    serialize   < Names     :       >
+    serialize   < Division  :       >
+    serialize   < Delnodes  :       >
+    serialize   < Merged    :       >
+
+  The alias is not inherited to avoid accidentally
+  polluting ad_hoc or nested groups. This defines
+  a default alias, allowing for:
+
+    serialize   < alias     % pass1 >
+    serialize   < Nodes     = foo   > # explicit alias is foo
+    serialize   < Nodes     :       > # default alias is pass1
+    serialize   < Names     :       > 
+    serialize   < Division  :       >
+    serialize   < Delnodes  :       >
+    serialize   < Merged    :       >
+
+- The 'ad_hoc' attribute can be assigned to an alias.
+  This simplifies schedules like:
+
+    serialize   < alias     % pass1 >
+    serialize   < Nodes     ~ ad_hoc> 
+    serialize   < Names     ~ ad_hoc> 
+    serialize   < Division  ~ ad_hoc>
+    serialize   < Delnodes  ~ ad_hoc>
+    serialize   < Merged    ~ ad_hoc>
+    serialize   < Nodes     :       > # default alias is pass1
+    serialize   < Names     :       > 
+    serialize   < Division  :       >
+    serialize   < Delnodes  :       >
+    serialize   < Merged    :       >
+
+  to just:
+
+    serialize   < alias     % pass1 >
+    serialize   < pass1     ~ ad_hoc>
+    serialize   < Nodes     :       >
+    serialize   < Names     :       > 
+    serialize   < Division  :       >
+    serialize   < Delnodes  :       >
+    serialize   < Merged    :       >
+
+  Which leaves each of the jobs (Nodes, Names, etc) 
+  handed of as ad_hoc jobs via the managers 'pass1'
+  as $mgr->pass1( $job ).
+
+- Pushed the alias resolver into P::D::Queue, unalias
+  returns the name and sub, but $que->resolve_alias( $job )
+  will return just the alias. This is used in merge_attrib
+  to get alias attributes.
+
+- merge_attrib uses global, alias, and job attributes.
+  this allows for "alias ~ foo" in the schedules.
+  
+
+4.06 Thu Jun  4 16:14:16 EDT 2009
+
+- Added ./Profile programs to MANIFEST. These are
+  stripped down schedules with empty jobs that 
+  are useful for profiling the library. For example:
+
+    make && perl -Mblib -d:Profile Profile/many-jobs-fork;
+    less prof.out;
+
+  Note that these require Devel::Profile, which 
+  is not in the dependency tree.
+
+- Add boilerplate to ad_hoc jobs.
+
+- Pushed the expensive tests into t/expensive.
+  They still require EXPENSIVE_TESTS true but 
+  this avoids the extraneous junk. 
+
+- Add a few more ad_hoc tests [which seem to work].
+
+- Pushed namespace, group name generation and splitting
+  of job_ids into queue in order to keep the constants
+  used with them ($nspace_sep, $job_id_sep) private.
+
 4.05 Fri May 29 12:36:43 EDT 2009
 
 - Split out que contents lookups into separate

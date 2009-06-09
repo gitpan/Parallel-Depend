@@ -5,6 +5,7 @@ README
 lib/Parallel/Depend.pm
 lib/Parallel/Depend/Queue.pm
 lib/Parallel/Depend/Util.pm
+t/00-Parallel-Depend-Queue.t
 t/00-Parallel-Depend-Util.t
 t/00-Parallel-Depend.t
 t/01-existing-object-fork.t
@@ -17,13 +18,17 @@ t/04-simple-group-nofork.t
 t/05-nested-group-nofork.t
 t/06-multiple-jobs-fork.t
 t/06-multiple-jobs-nofork.t
-t/10-many-jobs-fork.t
-t/10-many-jobs-nofork.t
-t/11-many-groups-fork.t
-t/11-many-groups-nofork.t
-t/12-multi-level-groups-fork.t
-t/12-multi-level-groups-nofork.t
-t/13-ad-hoc-group-nofork.t
-t/13-ad-hoc-group-fork.t
-Profile
-META.yml
+t/07-ad-hoc-job-fork.t
+t/07-ad-hoc-job-nofork.t
+t/08-ad-hoc-group-fork.t
+t/08-ad-hoc-group-nofork.t
+t/09-ad-hoc-nested-fork.t
+t/09-ad-hoc-nested-nofork.t
+t/09-ad_hoc-not-inherited-fork.t
+t/expesive/10-many-jobs-fork.t
+t/expesive/10-many-jobs-nofork.t
+t/expesive/11-many-groups-fork.t
+t/expesive/11-many-groups-nofork.t
+t/expesive/12-multi-level-groups-fork.t
+t/expesive/12-multi-level-groups-nofork.t
+META.yml                                 Module meta-data (added by MakeMaker)

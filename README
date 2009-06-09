@@ -1,6 +1,11 @@
 
+This module will be in beta for the duration
+of version X.0.Y (e.g., 4.0.99). The X.1 release
+should be stable enough to use.
+
 The current release of P::D requires Perl-5.10 via
-"use" syntax in the modules and tests.
+"use" syntax in the modules and tests. Smart matches
+were just too good to pass up :-)
 
 This module is intended for systems with a working
 fork. If your system's fork is broken then it will
@@ -9,17 +14,17 @@ Adjusting the parameters in the expensive tests
 (see next paragraph) will help determine just how
 much abuse your system can handle.
 
-A number of items in t/*t are intended to stress-
+Tests in in t/expensive/*t are intended to stress-
 test the module. They stress-test your system at
 the same time: creating over 100_000 status files
 or forking hundreds of jobs in a short period.
 All of the really dangerous tests will short-circut
 unless EXPENSIVE_TESTS is set in the environment --
-for example "EXPENSIVE_TESTS=1 prove --blib t/*t"
-will run everything. 
+for example "EXPENSIVE_TESTS=1 prove --blib t/expenxive
+will beat up the system.
 
-All of ./Profile/*t (currently empty) are intended 
-for use with Devel::Profile. For example:
+All of ./Profile/*  are intended for use with
+Devel::Profile. For example:
 
     perl -d:Profile --blib Profile/phorkatosis;
 
@@ -28,4 +33,10 @@ Devel::Profile to the Manifest for the small
 number of cases where anyone cares. Those of us 
 who do this kind of profiling will already have 
 D::P installed and won't care; everyone else can 
-ignore them.
+ignore them. These use various levels of 
+complexity with jobs aliases to a nil sub:
+
+    sub {}
+
+they test how much overhead there is in the 
+P::D code, not the stuff underneath.

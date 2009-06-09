@@ -9,12 +9,13 @@ WriteMakefile
     # of Parallel::Depend but may change due to 
     # documentation or ::Util updates.
 
-    VERSION	=> '4.05',
+    VERSION	=> '4.07',
 
 	ABSTRACT	=> <<'END',
 Parallel process startup with dependencies and restart.
 Manager object can dispatch perl methods or functions,
-shell, or code blocks from the schedule.
+shell, or code blocks from the schedule and use running
+jobs to generate and schedule new ones.
 END
 
 	AUTHOR     	=> 'Steven Lembark <lembark@wrkhors.com>',
