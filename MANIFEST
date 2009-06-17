@@ -24,7 +24,7 @@ t/08-ad-hoc-group-fork.t
 t/08-ad-hoc-group-nofork.t
 t/09-ad-hoc-nested-fork.t
 t/09-ad-hoc-nested-nofork.t
-t/09-ad_hoc-not-inherited-fork.t
+t/09-ad-hoc-not-inherited-fork.t
 t/expesive/10-many-jobs-fork.t
 t/expesive/10-many-jobs-nofork.t
 t/expesive/11-many-groups-fork.t

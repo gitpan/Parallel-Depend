@@ -2,6 +2,69 @@
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 
+4.08
+
+- Groups have to do some housekeeping on their 
+  way out.  Simplest way to ensure it gets done 
+  is add an ad_hoc attribute to each group job. 
+  Since the group's job runs at the end, running 
+  it without forking allows any necessary 
+  cleanups to happen (see next item also).
+
+  This has an advantage for long-lived 
+  schedules since purging the extra data 
+  keeps the queue at a reasonable size 
+  if multiple sets of ad-hoc jobs are added
+  over time.
+
+- ad_hoc groups are a convienent way for 
+  factory items to insert schedule content.
+
+  Catch: The object that dispatched ad_hoc may 
+  not be the one used to unalias the job within 
+  execute.
+
+  Fix: the ad_hoc method adds the current object 
+  into the attributes for its hidden group. 
+  Within unalias, the ad_hoc_mgr attribute is 
+  used if it exists to resolve method calls.
+
+  The object will stay alive for the group 
+  execution due to being stored in the group's 
+  attributes, which are purged on the way out
+  of the group (see previous item).
+
+  Result is that a main handler can use 
+  something like:
+
+      my $child = $other_class->new;
+
+      $mgr->share_queue( $child );
+
+      ...
+
+      $child->ad_hoc( @stuff );
+
+  and know that $child will be used to
+  dispatch the jobs added via ad_hoc
+  and also that $child will be destroyed
+  after all of its ad-hoc jobs have been
+  completed.
+
+- Added "purge_group" to purge the attributes
+  and aliases for the group job itself and 
+  the group-specific tables for jobs that
+  ran inside of the group.
+
+  This is called from the group method, 
+  call this via SUPER or NEXT if the
+  method is overridden. This is where
+  the ad hoc manager object is dropped,
+  so failing to cause this will leave 
+  any number of otherwise-short-lived
+  objects floating around in the attributes
+  until the schedule completes.
+
 4.07 Mon Jun  8 19:43:45 EDT 2009
 
 - Fix typo "INT_" in signal name.

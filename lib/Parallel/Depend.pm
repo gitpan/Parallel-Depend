@@ -13,7 +13,7 @@ use IO::File;
 
 use Benchmark       qw( :hireswallclock );
 use Cwd             qw( abs_path );
-use Scalar::Util    qw( blessed looks_like_number refaddr );
+use Scalar::Util    qw( blessed looks_like_number refaddr weaken );
 use Storable        qw( dclone );
 use Symbol          qw( qualify qualify_to_ref );
 
@@ -24,7 +24,7 @@ use Parallel::Depend::Util;
 # package variables
 ########################################################################
 
-our $VERSION = v4.0.7;
+our $VERSION = v4.0.8;
 
 # inside-out structure for the caller's objects.
 
@@ -672,8 +672,14 @@ sub precheck
             # localize the group's data, its own group
             # entry is redundent at this point.
 
+            my $save_mgr
+            = delete $que->{ attrib }{ save_mgr };
+
             local $que->{ attrib }  = $que->attrib;
             local $que->{ alias  }  = $que->alias;
+
+            $que->{ attrib }{ ad_hoc_mgr } = $mgr
+            if $save_mgr;
 
             $add_sched->( $sched );
 
@@ -685,6 +691,15 @@ sub precheck
             }
             keys %$beforz
         };
+
+        # the group itself has to be run in the 
+        # foreground in order to clean out the 
+        # queue structure when it completes.
+
+        $que->set_job_attrib
+        (
+            $group, ad_hoc => 1
+        );
 
         # note that @in_group may be empty, main
         # example will be ad_hoc jobs that don't
@@ -987,7 +1002,11 @@ sub precheck
         # this much of the work has to be
         # done in the starting namespace.
 
-        $que        = $mgr->queue;
+        $que        = $mgr->queue
+        or log_fatal
+        "Bogus ad_hoc: '$mgr' has no queue",
+        'Missing $parent->share_queue( $child )?',
+        ;
 
         my $job     = $que->{ job }
         or log_fatal "Bogus ad_hoc: no job";
@@ -1008,6 +1027,11 @@ sub precheck
         local $que->{ namespace } = $nspace;
         local $que->{ alias     } = $que->alias;
         local $que->{ attrib    } = $que->attrib;
+
+        # flag for add_single_group; removed
+        # during processing.
+
+        $que->{ attrib }{ save_mgr } = 1;
 
         ( $debug, $verbose ) 
         = @{ $que->{ attrib }}{ qw( debug verbose ) };
@@ -1109,6 +1133,18 @@ sub unalias
     my $verbose = $attrz->{ verbose };
     my $detail  = $verbose > 1;
 
+    # use the calling object to dispatch
+    # methods in the closure if this job
+    # was entered via an ad_hoc schedule.
+
+    'ad_hoc_mgr' ~~ $attrz
+    and $mgr = $attrz->{ ad_hoc_mgr };
+
+    my $package = blessed $mgr;
+
+    log_message "Resolving methods in: $package"
+    if $verbose;
+
     my $sub = '';
 
     given( $run )
@@ -1131,12 +1167,11 @@ sub unalias
 
         when( $mgr->can( $_ ) )
         {
-            if( $detail )
-            {
-                my $class   = blessed $mgr;
+            log_message "$package can: $run"
+            if $detail;
 
-                log_message "$class can: $_";
-            }
+            # closure isolates the current
+            # manager object automatically.
 
             $sub = sub { $mgr->$run( $job ) };
         }
@@ -1321,15 +1356,20 @@ sub shellexec
 
 sub group
 {
+    # this has to clean out the attributes
+    # for the group. avoids clutter and 
+    # allows destruction of ad_hoc_mgr.
+
     my ( $mgr, $group ) = @_;
 
     my $que     = $mgr->queue;
+    $que->purge_group( $group );
+
     my $nspace  = $que->{ namespace };
-    my $message = "'$group' ($nspace)";
 
-    log_message "Complete: $message";
+    log_message "Complete: group $nspace - $group";
 
-    $message
+    "'$group' ($nspace)"
 }
 
 ########################################################################

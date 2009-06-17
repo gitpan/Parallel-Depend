@@ -56,8 +56,6 @@ sub test
     my $beforz  = $que->{ before };
     my $afterz  = $que->{ after  };
 
-    $DB::single = 1;
-
     $afterz->{ 'test', '_' } == $afterz->{ '', 'test' }
     or BAIL_OUT 'ad_hoc job failed inherit parent after';
 

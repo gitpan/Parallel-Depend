@@ -18,7 +18,7 @@ use Symbol                  qw( qualify_to_ref );
 # package variables
 ########################################################################
 
-our $VERSION    = v1.1.0;
+our $VERSION    = v1.2.0;
 
 my $empty       = {};
 
@@ -123,11 +123,11 @@ for
 {
     my ( $type, $purge ) = @$_;
 
-    my $ref = qualify_to_ref $type;
+    my $key     = '_' . $type;
 
-    my $key = '_' . $type;
+    my $get     = qualify_to_ref $type;
 
-    *$ref
+    *$get
     = sub
     {
         my ( $que, $nspace ) = @_;
@@ -146,6 +146,22 @@ for
             \%b
         }
     };
+}
+
+sub purge_group
+{
+    my ( $que, $group ) = @_;
+
+    my $job_id  = $que->job_id( $group );
+
+    my $grp_id  = $que->namespace( $group );
+
+    for( @{ $que }{ qw( _attrib _alias ) } )
+    {
+        delete @{ $_ }{ ( $grp_id, $job_id ) };
+    }
+
+    return
 }
 
 ########################################################################
@@ -223,6 +239,7 @@ sub resolve_alias
     ? ( $alias => $job )
     : $alias
 }
+
 
 ########################################################################
 # mainly used to merge attributes from jobs with the currently
