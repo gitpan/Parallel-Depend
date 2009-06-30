@@ -96,6 +96,15 @@ my $token_rx    = qr{ [ \t]+ ([@directivz]) [ \t]+ }xo;
 #
 # the initial queue is installed by prepare.
 
+sub has_queue
+{
+    my $mgr = shift;
+
+    exists $mgr2que{ refaddr $mgr }
+}
+
+*was_prepared = \&has_queue;
+
 sub queue
 {
     my $mgr = shift;
@@ -1167,11 +1176,14 @@ sub unalias
 
         when( $mgr->can( $_ ) )
         {
-            log_message "$package can: $run"
-            if $detail;
+            if( $detail )
+            {
+                my $class   = blessed $mgr;
 
-            # closure isolates the current
-            # manager object automatically.
+                log_message "$class can: $_"
+            }
+
+            # closure isolates the current manager.
 
             $sub = sub { $mgr->$run( $job ) };
         }
@@ -1363,6 +1375,7 @@ sub group
     my ( $mgr, $group ) = @_;
 
     my $que     = $mgr->queue;
+
     $que->purge_group( $group );
 
     my $nspace  = $que->{ namespace };
@@ -1973,16 +1986,24 @@ sub execute
         "Non-root namespace: '$nspace' complete",
         "Skipping deadlock checks";
     }
+    elsif( $mgr->queued )
+    {
+        # at this point if nothing is runnable or 
+        # running then there should be nothing queued.
+
+        my $blockz  = $que->{ before };
+        my $pendz   = $que->{ after };
+
+        log_fatal 
+        'Deadlocked queue:',
+        'Blocked jobs:',        [ sort keys %$blockz ],
+        'Remaining jobs:',      [ sort keys %$pendz  ],
+        'Entire Queue:',        $que
+    }
     else
     {
-        # at this point if nothing is runnable or running
-        # then there should be nothing queued (i.e., the
-        # schedule should have been fully consumed).
-
-        $mgr->queued
-        and log_fatal 'Deadlocked que:', $que;
+        log_message 'Queue completed';
     }
-    
 
     # flag the que as complete.
 
@@ -2002,32 +2023,29 @@ __END__
 Parallel::Depend : Parallel-dependent dispatch of
 perl or shell code.
 
-Note: these are mildly out of date. Checking the
-tests will give a better idea of how to use these.
-
 =head1 SYNOPSIS
 
     package Mine;
 
-    use base qw( Parallel::Depend );
+    use base qw( Parallel::Depend Whatever::Else );
 
-    my $manager = Mine->getone( @whatever );
+    my $manager = Mine->constructify( @whatever );
 
     my @argz =
     (
         # assign values to attributes
 
-        verbose => 1,       # parsing, execution detail
-        debug   => 0,       # DB::single set before first parse, dispatch
-
-        nofork      => '',  # single-stream
-        maxjobs     => 8,   # 0 == unlimited, < 0 == nofork.
-        fork_ttys   => '',  # used for $DB::fork_TTY
-
         restart     => '',  # restart in-process queue
         force       => '',  # ignore/overwrite previous execution
 
-        autoload    => '',  # true allows dispatch of unknown methods
+        verbose => 1,       # quiet (0), progress (1), detail (2).
+        debug   => 0,       # DB::single set before first parse, dispatch
+
+        nofork      => '',  # single-stream, useful for testing.
+        maxjobs     => 8,   # 0 => unlimited, x < 0 => nofork.
+        fork_ttys   => '',  # used for $DB::fork_TTY with perl debugger
+
+        autoload    => '',  # choose between autoload and shell
 
         logdir      => "$Bin/../var/log",   # stderr, stdout files
         rundir      => "$Bin/../var/run",   # job status files
@@ -2037,13 +2055,6 @@ tests will give a better idea of how to use these.
         this : that     # this runs after that
         that : other    # that runs after other
 
-        # assign job-specific attributes -- mainly to control
-        # verbosity or flag jobs as installing ad-hoc schedules.
-
-        this ~ ad_hoc       # default for all attributes is 1
-        this ~ verbose 0    # or add your own value
-        that ~ verbose 2
-
         # multiple dependencies per line or 1 : 1.
 
         foo bar : bletch blort
@@ -2052,7 +2063,8 @@ tests will give a better idea of how to use these.
         bim bam : this that
 
         # redundent but harmless if included.
-        # foo bar : blort bletch
+
+        foo bar : blort bletch
 
         # without aliases jobs are dispatched as manager
         # object methods, perl function calls, code
@@ -2088,11 +2100,6 @@ tests will give a better idea of how to use these.
         /tmp/bakcup/bigdump.ae :
         /tmp/bakcup/bigdump.af :
 
-        # attributes can be set this way,
-        # mainly useful within groups.
-
-        maxjob % 4  # run 4-way parallel
-
         # groups are sub-schedules that have their
         # own namespace for jobs, are skpped entirely
         # on restart if the group completes successfully,
@@ -2105,6 +2112,38 @@ tests will give a better idea of how to use these.
         pass2 < that  = squash      >   # *not* the same as the jobs above.
         pass2 < other = frobnicate  >
 
+        # attributes can be set, apply to all nested
+        # levels. helpful within groups.
+        #
+        # for example, extract the contents of some
+        # files, process them, then cleanup the 
+        # results. each group uses its own alias
+        # to handle the files.
+
+        maxjob % 0              # unlimited forks
+
+        after  < maxjob % 2 >   # two-way only for after group
+
+        prior  < alias % extract >  # default alias within the group
+        after  < alias % cleanup >
+        during < alias % process >
+
+        prior  < file1 : >  # $mgr->extract( 'file1' )
+        prior  < file2 : >  # $mgr->extract( 'file2' )
+
+        during < file1 : >  # $mgr->process( 'file1' )
+        during < file2 : >  # $mgr->process( 'file2' )
+
+        after  < file1 : >  # $mgr->cleanup( 'file1' )
+        after  < file2 : >  # $mgr->cleanup( 'file2' )
+
+        # assign job-specific attributes -- mainly to control
+        # verbosity or flag jobs as installing ad-hoc schedules.
+
+        this ~ ad_hoc       # default for all attributes is 1
+        this ~ verbose 0    # or add your own value
+        that ~ verbose 2
+
         # as you might have guessed by now, text after
         # an un-escaped hash sign is treated as a comment.
 END
@@ -2116,7 +2155,9 @@ END
         $manager->prepare ( @argz );    # parase, validate the queue.
         $manager->validate;             # check for deadlocks
         $manager->execute;              # do the deed
-        1
+
+        "The End"
+        
     }
     or die $@;
 
@@ -2129,11 +2170,16 @@ END
     # ad_hoc jobs (e.g., factory class) then you
     # must share the queue for the new object.
 
-    my $manager = MyClass->new;
+    sub derive_new_object
+    {
+        my $mgr     = shift;
 
-    my $derived = $mgr->derive_a_new_object;
+        my $derived = $mgr->new( @_ );
 
-    $mgr->share_queue( $derived );
+        $mgr->share_queue( $derived );
+
+        $derived
+    }
 
     # at this point the derived object uses 
     # the same queue as the original $manager
@@ -2240,7 +2286,9 @@ the zips n-way parallel:
 =item Method Alias
 
 if $mgr->can( $alias ) then the alias will be
-dispatched as $mgr->$handler( $job );.
+dispatched as
+
+    $mgr->$alias( $job );
 
 For example
 
@@ -2255,37 +2303,59 @@ will dispatch:
 
     /path/to/file   = /bin/gzip -9v
 
-Will
+Will call 
 
-This can call $mgr->gzip( '/path/to/file1' ),
-etc, keeping four jobs running at a time (assuming
-$mgr->can( 'gzip' )). Using "/bin/gzip" for the
-alias will use the shell; "Some::Package::gzip"
-will call Some::Pacakge's gzip function passing it
-the path only (i.e., sans object); enclosing Perl
-syntax in curlys will generate an anon subroutine
-from them and call it as $sub->( '/path/to/file1' ).
+    system '/bin/gzip -9v', '/path/to/file'
 
-=back
+(splitting the command line on un-escaped whitespace
+is hell, the shell can do it well enough for itself).
+
+=item Perl Function Alias
 
 If you don't want to pass the queue manager object (i.e.,
 functonal interface) just include the package with '::':
 
     /path/to/file1  = My::Class::Util::gzip
-    /path/to/file1  :
 
-will call gzip( '/path/to/file' ), without the object.
+will end up calling
 
-If your program needs to generate the result, aliasing
-to a perl code block will generate an anonymous subroutine
-on the fly and call that:
+    $coderef->( '/path/to/file1' );
 
-    argumentative   = { my $arg = shift; ... }
+=item Code Block Alias
 
-    argumentative :
+For complete -- if somewhat dangerous -- control
+use a codeblock. This will be compiled on the fly
+into a subroutine and run with job as its argument.
 
-will generate my $sub = "sub{ my $arg = shift; ... }"
-and call $sub->( 'argumentative' );
+Using 
+
+    foo     = { a block of perly code }
+   
+Will eval "sub $alias" to get a subref and 
+dispatch $subref->( 'foo' ). This is one way
+to dodge passing around the manager object if
+necessary.
+
+=item AUTOLOAD
+
+If the 'autoload' attribute is set, the manager
+can 'AUTOLOAD', and the alias looks like a method
+call then unalias will trust to luck and compile
+
+    sub { $mgr->$alias( $job ) }
+
+For you. This can be helpful for allowing nested
+class structures to derive their own objects to 
+handle specific parts of processing: just pass 
+class name as the job, alias it to the method
+being dispatched, and have your AUTOLOAD take the
+argument as the class to dispatch into. This case
+is where sharing the queue also comes in handy.
+
+It is also useful with modules that depend on 
+autoload side effects to function.
+
+=back
 
 =head3 Groups (sub-schedules) "< ... >"
 
@@ -2296,17 +2366,50 @@ Groups are schedules within the schedule:
 	group < job2 job3 job4 : job5 job6 >
 	group < job3 : job5 >
 
-The main use of groups is to start a number of jobs without
-having to hard-code all of the dependencies on the one job
-(e.g., downloading a number of tarballs depending on setting
-up a destination directory). They are also useful for managing
-the degree of parallelism: groups are single jobs to the main
-schedule's "maxjobs", so multiple groups can run at once with
-their own maxjob limits. The first time "gname <.+>" is seen the
-name is inserted as an alias if it hasn't already been seen
-(i.e., "group" is a built-in alias). The group method is eventually
-called with the group's name as an argument to prepare and
-execute the sub-que.
+Groups provide a separate namespace for their jobs, 
+attributes, and aliases and are skipped wholesale
+on restart.
+
+The most common use of groups is to process a set
+of data through multiple stages. This can be done 
+easily by putting each stage in a group, assigning
+a hardwired alias within the group, and adding the
+data. For example:
+
+    my @fixed =
+    (
+        'maxjob % 4',
+        'prior  < alias % /path/to/gzip -dv >',
+        'during < alias % process >',
+        'after  < alias % /path/to/gzip -9v >',
+
+        'during : prior',
+        'after  : during',
+    );
+
+    my @variable
+    = map
+    {
+        (
+            "prior  < $_ : >",
+            "during < $_ : >",
+            "after  < $_ : >",
+        )
+    }
+    glob '/tmp/incoming/*';
+
+    $mgr->prepare( @fixed, indir @variable );
+    $mgr->execute;
+
+Will run all of the jobs 4-way parallel through gzip -d, 
+the process method, and gzip -9.
+
+On a restart if the "prior" group completed then 
+it will be stubbed on restart and none of its 
+contents run. This helps avoid expensive side-
+effects in preparing the jobs.
+
+=head3 Rolling Your Own
 
 The unalias method returns an id string ($name) for
 tracking the job and a closure to execute for
@@ -2317,8 +2420,13 @@ running it:
 	my $return = $mgr->runjob( $sub );
 
 The default runjob simply dispatchs $sub->() but it
-might be overridden to wrap, eval, or otherwise manage
-the execution.
+might be overloaded to wrap, eval, or otherwise manage
+the execution. Overloading unalias gives you complete
+control over how the jobs are processed. This can be
+helpful for cases where the method + argument is not
+sufficient.
+
+=head3 Setting Schedule Attributes
 
 Settings are used to override defaults in the schedule
 preparation. Defaults are taken from hard-coded defaults
@@ -2336,6 +2444,87 @@ the only way to override the que attributes. One good
 example of these is setting maxjob to 2-3 in order to
 allow multiple groups to start in the main schedule and
 then to 1 in the groups to avoid flooding the system.
+
+Groups inherit the attributes of their enclosing group;
+everyone inherits from the the global settings.
+
+For example:
+
+    maxjob % 4
+
+    expensive < maxjob % 2 >
+    cheap     < maxjob % 8 >
+
+Leaves most things runnin 4-way parallel, with jobs in
+the "expensive" group throttled, ones in "cheap" run
+8-ways.
+
+Sometimes attributes need to be set for one job. This
+is usually to up verbosity to check a failure or to
+flag the job as installing an ad-hoc schedule:
+
+    alias % frobnicate
+
+    /input/path = check_filesystem
+
+    /input/path ~ ad_hoc
+
+    /input/path : extract
+    cleanup : /input/path
+
+Will run "find_files" without forking so that it can 
+call $mgr->ad_hoc( ... ) to install a scheudle on the
+fly. Both "extract" and "cleanup" will be passed to
+"frobnicate", where the input path will be passed to 
+"check_filesystem". 
+
+The "check_filesystem" call will be made without forking.
+This allows the method to install jobs for files it finds.
+This also creates a group "check_filesystem._" to contain
+the results of the ad-hoc schedule (see ad_hoc method).
+
+=head3 Ad-Hoc schedules
+
+There are times when you want a job to run in order to
+determine what happens next. Examples are searching the
+filesystem for inputs or processing the chunked output
+a previous stage. In both caess it is easier to have a
+job add to the running schedule.
+
+The "ad_hoc" call adds jobs into the current schedule.
+For this to work the current job cannot be forked. This
+means that either the entire queue runs with "nofork"
+set or that the job is flagged as "ad_hoc". The difference
+is that ad_hoc is a flag for only one job:
+
+    /input/dir ~ ad_hoc
+
+    /input/dir = find_files
+
+    /input/dir : download
+    load_data  : /input/dir
+
+This will fork download, wait until it completes, then
+dispatch find_files without forking. When the sub-schedule
+installed by find_files completes then load_data will be
+called.
+
+The ad_hoc call installs a new group 'job._', which can
+contain its own attributes, aliases, or groups:
+
+    sub find_files
+    {
+        my ( $mgr, $path ) = @_;    # $path is '/input/dir'
+
+        my @jobz
+        = map
+        {
+            my $base    = basename $_;
+            my ( $grp ) = $base =~ m{ [.] (\w+) [.]gz };
+            o
+        }
+        or die "Invalid input: '$path' has no files";
+    }
 
 =head1 Arguments
 
@@ -3056,11 +3245,7 @@ exit status test in the parent when the job is run.
 Summary by subroutine call, with notes on overloading and
 general use.
 
-=head2 boolean overload
-
-Simplifies the test for remaining jobs in execute's while
-loop; also helps hide the guts of the queue object from
-execute since the test reduces to while( $que ).
+=head 
 
 =head2 ready
 

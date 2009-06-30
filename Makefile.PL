@@ -9,7 +9,7 @@ WriteMakefile
     # of Parallel::Depend but may change due to 
     # documentation or ::Util updates.
 
-    VERSION	=> '4.08',
+    VERSION	=> '4.09',
 
 	ABSTRACT	=> <<'END',
 Parallel process startup with dependencies and restart.

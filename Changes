@@ -2,7 +2,13 @@
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 
-4.08
+4.09 Tue Jun 30 12:14:45 EDT 2009
+
+- POD. It ain't perfect but does include the
+  "alias % global" and "ad_hoc" settings for
+  embedded schedules.
+
+4.08 Sun Jun 28 18:52:54 EDT 2009
 
 - Groups have to do some housekeeping on their 
   way out.  Simplest way to ensure it gets done 
@@ -64,6 +70,10 @@ Revision history for Perl extension Parallel::Depend
   any number of otherwise-short-lived
   objects floating around in the attributes
   until the schedule completes.
+
+- Add "has_queue" with alias "was_prepared" to check if the
+  manager object has called prepare successfully -- which will
+  leave it with a queue.
 
 4.07 Mon Jun  8 19:43:45 EDT 2009
 
