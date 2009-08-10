@@ -171,7 +171,7 @@ sub namespace
 {
     my $que = shift;
 
-    'namespace' ~~ $que
+    exists $que->{ namespace }
     or log_fatal 'Bogus namespace: queue missing namespace';
 
     defined ( my $nspace  = $que->{ namespace } )

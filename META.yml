@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Parallel-Depend
-version:            4.09
+version:            4.10
 abstract:           Parallel process startup with dependencies and restart.
 Manager object can dispatch perl methods or functions,
 shell, or code blocks from the schedule and use running
@@ -37,7 +37,7 @@ no_index:
     directory:
         - t
         - inc
-generated_by:       ExtUtils::MakeMaker version 6.50
+generated_by:       ExtUtils::MakeMaker version 6.52
 meta-spec:
     url:      http://module-build.sourceforge.net/META-spec-v1.4.html
     version:  1.4

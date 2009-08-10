@@ -8,6 +8,29 @@ Revision history for Perl extension Parallel::Depend
   "alias % global" and "ad_hoc" settings for
   embedded schedules.
 
+- share_queue without prepared queue is non-fatal,
+  returns empty list.
+
+- Force and restart used to be exclusive, with 
+  restart failing if any jobs looked like they
+  were currently running. In the interest of 
+  offering more rope for your gun [bullets for
+  your gallows?], force+restart now treats
+  that any incomplete runfiles as non-running,
+  failed jobs and restarts them.
+
+- $SIG{ INT } stores an abort message -- makes
+  it simpler to use ^C to abort a queue and then
+  restart it.
+
+- In order to handle situations where the jobs
+  fork their own cleanup tasks on exit (e.g.,
+  gzip output), the reaping cycle loops via
+  next if the current job is not in the fork
+  table. This will reap however many orphans it
+  can in one pass without bothering to check 
+  with runnable.
+
 4.08 Sun Jun 28 18:52:54 EDT 2009
 
 - Groups have to do some housekeeping on their 

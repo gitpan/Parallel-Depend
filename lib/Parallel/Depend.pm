@@ -16,6 +16,7 @@ use Cwd             qw( abs_path );
 use Scalar::Util    qw( blessed looks_like_number refaddr weaken );
 use Storable        qw( dclone );
 use Symbol          qw( qualify qualify_to_ref );
+use List::Util      qw( first );
 
 use Parallel::Depend::Queue;
 use Parallel::Depend::Util;
@@ -115,13 +116,22 @@ sub queue
     or log_fatal "Bogus queue: unknown '$mgr'"
 }
 
+# Note: this may be called as a precaution.
+# if the current manager does not have a queue
+# then do nothing.
+#
+# caller gets back the que in case they need to
+# modify something in-place as part of the 
+# handoff.
+
 sub share_queue
 {
     my ( $mgr, $child ) = @_;
 
-    $mgr2que{ refaddr $child }
-    = $mgr2que{ refaddr $mgr }
-    or log_fatal "Bogus share_queue: unknown'$mgr' ($child)";
+    my $que = $mgr2que{ refaddr $mgr }
+    or return;
+
+    $mgr2que{ refaddr $child }  = $que;
 }
 
 DESTROY
@@ -163,7 +173,7 @@ for my $name ( @standard_attrz )
             }
         }
 
-        $name ~~ $attrz
+        exists $attrz->{ $name }
         ? $attrz->{ $name }
         : return
     };
@@ -342,14 +352,20 @@ sub precheck
                     # precheck, no dispatch: looks
                     # like a running queue.
 
-                    log_fatal "Running queue: $nspace, $job ($path)";
+                    $force 
+                    ? log_error "Possibly running: $nspace, $job ($path)"
+                    : log_fatal "Running queue: $nspace, $job ($path)"
+                    ;
                 }
                 elsif( @linz < 4 )
                 {
                     # precheck + dispatch, no exit:
                     # looks like a running job.
 
-                    log_fatal "Running job: $nspace, $job ($path)";
+                    $force 
+                    ? log_error "Possibly running: $nspace, $job ($path)"
+                    : log_fatal "Running job: $nspace, $job ($path)"
+                    ;
                 }
                 elsif( $restart )
                 {
@@ -596,9 +612,11 @@ sub precheck
 
             my( $a, $b ) = map { [ split ] } @{ $_ }[1,2];
 
-            $_ ~~ $b
-            and log_fatal "Bogus $nspace: self-dependenent '$_'", $_
-            for @$a;
+            for my $job ( @$a )
+            {
+                first { $_ eq $job } @$b
+                and log_fatal "Bogus $nspace: self-dependenent '$job'";
+            }
 
             # precheck each job once.  this looks
             # for problems in the external
@@ -608,7 +626,7 @@ sub precheck
             {
                 next if exists $beforz->{ $nspace, $job };
 
-                $job ~~ @reserved_wordz
+                first { $_ eq $job } @reserved_wordz
                 and log_fatal "Unusable job name: '$job' (reserved)";
 
                 log_fatal "$$: Unrunnable: $job"
@@ -954,10 +972,17 @@ sub precheck
 
         eval
         {
-            local $que->{ namespace }   = $argz->{ namespace } || '';
+            my $init_nspace             = 
+
+            local $que->{ namespace }
+            = $que->{ _namespace }
+            = $argz->{ namespace } || '';
 
             local $que->{ attrib }      = $que->attrib;
             local $que->{ alias  }      = $que->alias;
+
+            $que->{ attrib }{ init_namespace }
+            = $init_nspace;
 
             $DB::single = 1 if $^P && $debug;
 
@@ -988,14 +1013,19 @@ sub precheck
     {
         $mgr        = shift;
 
-        blessed $mgr
-        or log_fatal "Bogus ad_hoc: not a class method ($mgr)";
+        $que        = $mgr->queue
+        or log_fatal
+        "Bogus ad_hoc: '$mgr' has no queue",
+        'Missing $parent->share_queue( $child )?',
+        ;
 
         my $sched   = @_ > 1 ? [ @_ ] : shift
         or log_fatal "Bogus ad_hoc: missing schedule";
 
         ref $sched
-        or $sched  = [ split /\n/, $sched ];
+        or $sched   = [ split /\n/, $sched ];
+
+        $verbose    = $mgr->verbose;
 
         log_message 'Adding ad-hoc:', $sched
         if $verbose;
@@ -1010,12 +1040,6 @@ sub precheck
         #
         # this much of the work has to be
         # done in the starting namespace.
-
-        $que        = $mgr->queue
-        or log_fatal
-        "Bogus ad_hoc: '$mgr' has no queue",
-        'Missing $parent->share_queue( $child )?',
-        ;
 
         my $job     = $que->{ job }
         or log_fatal "Bogus ad_hoc: no job";
@@ -1094,6 +1118,9 @@ sub validate
 
     local $que->{ check }   = 1;
 
+    local $que->{ namespace }
+    = $que->{ _namespace };
+
     while( $mgr->queued )
     {
         my @runz    = $mgr->runnable
@@ -1108,7 +1135,7 @@ sub validate
 
     # survival indicates that the dependencies are usable.
 
-    return
+    $mgr
 }
 
 ########################################################################
@@ -1146,7 +1173,7 @@ sub unalias
     # methods in the closure if this job
     # was entered via an ad_hoc schedule.
 
-    'ad_hoc_mgr' ~~ $attrz
+    exists $attrz->{ ad_hoc_mgr }
     and $mgr = $attrz->{ ad_hoc_mgr };
 
     my $package = blessed $mgr;
@@ -1503,7 +1530,7 @@ sub complete
     # if we are still alive at this point then
     # enable the following jobs.
 
-    if( $job_id ~~ $skipz )
+    if( exists $skipz->{ $job_id } )
     {
         if( my $reason = delete $skipz->{ $job_id } )
         {
@@ -1619,7 +1646,7 @@ sub execute
     my $mgr     = shift;
     my $que     = $mgr->queue;
 
-    'executed' ~~ $que
+    exists $que->{ executed }
     and log_fatal "Bogus execute: already executed ($mgr)";
 
     # used to track jobs with forked dispatch.
@@ -1688,7 +1715,26 @@ sub execute
             $SIG{ TERM } = 'DEFAULT';
             kill TERM => 0;
         }
+    };
 
+    local $SIG{ INT }
+    = sub
+    {
+        if( $$ == $parent )
+        {
+            # blow off the forks and flag
+            # all of the jobs running for
+            # restart.
+
+            kill INT => keys %forkz;
+
+            $abort = "$$ killed with INT";
+        }
+        else
+        {
+            $SIG{ INT } = 'DEFAULT';
+            kill INT => 0;
+        }
     };
 
     local $SIG{ QUIT }
@@ -1709,24 +1755,6 @@ sub execute
         }
     };
 
-    local $SIG{ INT  }
-    = sub
-    {
-        if( $$ == $parent )
-        {
-            # blow off the forks and exit immediately.
-
-            kill INT => keys %forkz;
-
-            exit -1
-        }
-        else
-        {
-            $SIG{ INT } = 'DEFAULT';
-            kill INT => 0;
-        }
-    };
-
     # i.e., reap them here.
 
     local $SIG{ CHLD } = 'DEFAULT';
@@ -1736,22 +1764,28 @@ sub execute
     my %job2attrz   = ();
     my @pending     = ();
 
-    # avoid overwriting a pre-defined namespace.
+    # start with the initially declared namespace.
+    # this was installed via prepare -- usually as
+    # the empty string (default).
 
-    local $que->{ namespace } = $que->{ namespace } // '';
+    local $que->{ namespace } = $que->{ _namespace };
 
     # loop forever until there is nothing either
     # queued or running.
 
-    for( my $running = 0 ;; )
+    for( ;; )
     {
         @pending = $mgr->runnable;
 
         # queue is exhausted if nothing is either
         # running or pending.
 
-        $running || @pending
+        %forkz || @pending
         or last;
+
+        # this is compared often enough to be worth caching.
+
+        my $running = keys %forkz;
 
         RUNNABLE:
         for my $job_id ( @pending )
@@ -1764,7 +1798,7 @@ sub execute
             $skipz->{ $job_id } //= 'Skip on SIGHUP'
             if $abort;
 
-            if( $job_id ~~ $skipz )
+            if( exists $skipz->{ $job_id } )
             {
                 # don't bother to run jobs in the skip
                 # chain: complete will propagate true
@@ -1793,9 +1827,10 @@ sub execute
             # jobs set, need to check the attributes
             # for each pending job.
             #
-            # cache these: they won't change over the
-            # lifetime of the queue and have to be 
-            # examined frequently as jobs run.
+            # localize $attrz for the current job's
+            # namespace. Aside: take time to rename
+            # "$attrz" on the next cleanup; something
+            # like $job_attrz?
 
             local $que->{ namespace } = $nspace;
 
@@ -1904,12 +1939,12 @@ sub execute
                     # parent: store the pid and recovery
                     # information and keep going.
 
-                    log_message "Forked: $name ($nspace, $pid)"
+                    log_message "Forked: $name ('$nspace', $pid)"
                     if $verbose;
 
                     $forkz{ $pid }  = $job_id;
 
-                    ++$running
+                    ++$running;
                 }
                 elsif( defined $pid )
                 {
@@ -1942,46 +1977,71 @@ sub execute
         # been dispatched -- or are being throttled
         # via maxjobs.
         #
-        # now next availale job and complete it.
-        # this will have no affect in nofork mode.
+        # now wait job and complete the next job, 
+        # which opens up a slot under maxjobs.
         #
         # unknown pids happen when a child process
-        # forks and dies before its child. choices
-        # are to ignore it here or give up since the
-        # outcome cannot be logged.
+        # forks and dies before its child (e.g., 
+        # forking a gzip to finish writing data).
+        # choices are to ignore it here or give up
+        # since the outcome cannot be logged.
         #
         # the normal cycle will reap what we fork
         # here, so for the moment these are just
-        # logged as errors.
+        # logged if verbose it turned on.
 
-        if( ( my $pid = wait ) > 0 )
+        WAIT:
+        for( ;; )
         {
-            my $exit    = $?;
-
-            if( my $job_id  = delete $forkz{ $pid } )
+            if( ( my $pid = wait ) > 0 )
             {
-                log_message "Reaped: $job_id ($pid => $exit)"
-                if $verbose;
+                my $exit    = $?;
 
-                $mgr->complete( $job_id, $exit );
+                if( my $job_id  = delete $forkz{ $pid } )
+                {
+                    log_message "Reaped: $job_id ($pid => $exit)"
+                    if $verbose;
 
-                --$running;
+                    $mgr->complete( $job_id, $exit );
+                }
+                else
+                {
+                    # notice the orphan and keep going until
+                    # there is nothing to wait for or we hit
+                    # one of the ones we forked.
+
+                    log_error "Orphan process: $pid ($exit)"
+                    if $verbose;
+
+                    next WAIT
+                }
+            }
+            elsif( %forkz )
+            {
+                # someone set $SIG{ CHLD } to 'IGNORE' 
+                # or installed their own signal handler.
+                # only thing to do is log the fact, reset
+                # the forks and keep going.
+
+                log_error
+                'Oddity: no procs, non-empty forks:', \%forkz;
+
+                %forkz  = ();
             }
             else
             {
-                # don't offset $running here: the number of 
-                # outstanding jobs from our point of view
-                # didn't change with the orphaned process.
-
-                log_error "Reaped orphan process: $pid ($exit)";
+                # nothing more to do: empty forkz and 
+                # no child procs.
             }
+
+            # normally only go through here once.
+
+            last
         }
     }
 
-    if( $que->{ namespace } )
+    if( my $nspace = $que->{ _namespace } )
     {
-        my $nspace  = $que->{ namespace };
-
         log_message
         "Non-root namespace: '$nspace' complete",
         "Skipping deadlock checks";
