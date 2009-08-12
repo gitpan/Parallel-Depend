@@ -2,6 +2,11 @@
 Revision history for Perl extension Parallel::Depend
 (most recent first).
 
+4.10.1 Wed Aug 12 13:25:33 EDT 2009
+
+Finished removing smart matches; which fixed
+the broken tests.
+
 4.09 Tue Jun 30 12:14:45 EDT 2009
 
 - POD. It ain't perfect but does include the

@@ -60,7 +60,7 @@ my $que
 }
 or BAIL_OUT "Queue const fails: $@";
 
-ok $_ ~~ $que, "Que has '$_'"
+ok exists $que->{ $_ }, "Que has '$_'"
 for @keyz;
 
 my $attrz   = $que->{ _attrib }{ '' };
